@@ -2325,7 +2325,6 @@ function Home({ session, profile, themeCtx }) {
                                     theme={theme} />
               );
             })}
-          </div>
         </div>
       </div>
 
