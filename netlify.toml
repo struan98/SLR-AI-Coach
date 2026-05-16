@@ -1,0 +1,32 @@
+# Netlify build configuration for SLR AI Coach.
+#
+# This file tells Netlify how to build and serve the app.
+# Connect a GitHub repo to Netlify and it picks this up automatically.
+
+[build]
+  # Vite outputs to dist/ by default
+  publish = "dist"
+  command = "npm run build"
+
+[build.environment]
+  # Node 20 is the current LTS that Netlify supports out of the box
+  NODE_VERSION = "20"
+
+# SPA redirect: any unknown path serves index.html so client-side
+# navigation and refreshes work. Without this, /food would 404.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Cache headers for the immutable build outputs
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# HTML should never be cached aggressively — users always get the latest entry point
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"

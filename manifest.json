@@ -1,0 +1,18 @@
+{
+  "name": "SLR AI Coach",
+  "short_name": "SLR AI",
+  "description": "Smarter Training. Tailored for You.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a2540",
+  "theme_color": "#0a2540",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

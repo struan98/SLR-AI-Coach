@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Prevent iOS double-tap zoom on buttons */
+button {
+  touch-action: manipulation;
+}
+
+/* Inputs must be 16px+ to prevent iOS Safari auto-zoom on focus */
+input,
+textarea,
+select {
+  font-size: 16px;
+}
+
+/* Safe-area padding helpers for notched devices */
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Hide number-input spinners on iOS Safari */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* Disable text selection on tap-and-hold for buttons (mobile feel) */
+button,
+[role="button"] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
