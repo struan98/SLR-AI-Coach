@@ -2265,11 +2265,11 @@ function Home({ session, profile, themeCtx }) {
         </div>
       )}
 
-      {/* 1. Daily checklist — top priority, what to do today. Photo to right adds energy. */}
+            {/* 1. Daily checklist — top priority, what to do today. */}
       <div className="px-4 mb-3">
         <h3 className={`text-[10px] font-bold uppercase tracking-wider ${theme.textMuted} mb-2`}>Today's checklist</h3>
-        <div className="flex gap-3">
-          <div className="flex-1 space-y-2 min-w-0">
+        <div className="space-y-2">
+
             <ChecklistRow iconName="food" label="Food" done={dayLog.food}
               value={dayLog.food ? `${dayLog.kcalEaten} kcal · P${dayLog.proteinEaten} F${dayLog.fatEaten} C${dayLog.carbsEaten}` : "Not logged"}
               onClick={() => window.dispatchEvent(new CustomEvent("sinc:switch-tab", { detail: { tab: "food" } }))} theme={theme} />
@@ -2326,15 +2326,9 @@ function Home({ session, profile, themeCtx }) {
               );
             })}
           </div>
-          {/* Side photo — always shown alongside checklist for visual energy */}
-          <div className="block w-[88px] shrink-0 rounded-2xl overflow-hidden relative" style={{ backgroundColor: NAVY }}>
-            <img src={HERO_CURL_B64} alt="" className="absolute inset-0 w-full h-full object-cover" style={{ opacity: 0.85 }} />
-            <div className="absolute inset-0" style={{
-              background: `linear-gradient(180deg, transparent 40%, ${NAVY}dd 100%)`,
-            }} />
-          </div>
-        </div>
+                  </div>
       </div>
+
 
       {/* 2. Today's calorie ring + macros */}
       <div className="px-4 mb-3">
