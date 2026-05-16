@@ -2322,13 +2322,12 @@ function Home({ session, profile, themeCtx }) {
                       setActiveTaskInput({ task, currentValue: response?.value });
                     }
                   }}
-                  theme={theme} />
+                                    theme={theme} />
               );
             })}
           </div>
-                  </div>
+        </div>
       </div>
-
 
       {/* 2. Today's calorie ring + macros */}
       <div className="px-4 mb-3">
