@@ -5623,13 +5623,12 @@ function AnNutrition({ profile, logs, lifts, blocks, theme }) {
   const stats = useMemo(() => {
     const dates = Object.keys(logs).filter(d => logs[d].food && logs[d].kcalEaten).sort();
     if (dates.length === 0) return null;
-    const last30 = dates.slice(-30);
+        const last30 = dates.slice(-30);
     const days = last30.map(d => {
-      const log = logs[d];
+      const log = logs[d] || {};
       const block = blocks?.find(b => d >= b.startDate && (!b.endDate || d < b.endDate));
       const target = block ? block.calTarget : calculateTargets(profile).calTarget;
-      return { date: d, kcal: log.kcalEaten, protein: log.proteinEaten || 0, fat: log.fatEaten || 0, carbs: log.carbsEaten || 0, target };
-    });
+      return { date: d, kcal: log.kcalEaten || 0, protein: log.proteinEaten || 0, fat: log.fatEaten || 0, carbs: log.carbsEaten || 0, target };
     const avgKcal = Math.round(days.reduce((s, d) => s + d.kcal, 0) / days.length);
     const avgProtein = Math.round(days.reduce((s, d) => s + d.protein, 0) / days.length);
     const avgCarbs = Math.round(days.reduce((s, d) => s + d.carbs, 0) / days.length);
