@@ -2280,7 +2280,7 @@ function Home({ session, profile, themeCtx }) {
     const d = new Date(); d.setDate(d.getDate() + dayOffset); return d;
   }, [dayOffset]);
   const dayKey = dayDate.toISOString().split("T")[0];
-  const dayLog = logs[dayKey] || { kcalEaten: 0, proteinEaten: 0, fatEaten: 0, carbsEaten: 0, weightValue: 0, stepsTaken: 0, food: false, weight: false, steps: false, workout: false };
+    const dayLog = { kcalEaten: 0, proteinEaten: 0, fatEaten: 0, carbsEaten: 0, weightValue: 0, stepsTaken: 0, food: false, weight: false, steps: false, workout: false, ...(logs[dayKey] || {}) };
 
   // Active custom tasks for the displayed day. activeBlockEnd lets us scope tasks
   // to the current training block if endKind === "block".
