@@ -1125,10 +1125,17 @@ export default function SINCApp() {
   if (!session) return <Auth themeCtx={themeCtx} />;
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.error("signOut failed", e);
+    }
     setSession(null);
     setProfile(null);
+    // Force a clean reload so any cached state is wiped.
+    window.location.reload();
   };
+
   if (session.role === "PT") return <PTApp session={session} themeCtx={themeCtx} onLogout={handleLogout} />;
   return <UserApp session={session} themeCtx={themeCtx} onLogout={handleLogout} />;
 }
@@ -7306,12 +7313,6 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
     setLinkedPT(null);
   };
 
-  const reset = async () => {
-    if (!confirm("Reset all demo data? Re-seeds on next load.")) return;
-    const keys = await storage.list("");
-    for (const k of keys) await storage.delete(k);
-    window.location.reload();
-  };
   return (
     <div className="pb-4">
       <div className="px-5 pt-10 pb-6 text-white relative overflow-hidden" style={{ background: `linear-gradient(135deg, ${theme.headerStart}, ${theme.headerEnd})` }}>
@@ -7624,7 +7625,6 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
           {dark ? "☀️  Light mode" : "🌙  Dark mode"}
         </button>
         <button onClick={onLogout} className={`w-full h-12 ${theme.surface} ${theme.surfaceText} rounded-xl font-semibold`}>Log out</button>
-        <button onClick={reset} className="w-full h-12 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm font-semibold">Reset demo data</button>
       </div>
 
       {showPTModal && (
