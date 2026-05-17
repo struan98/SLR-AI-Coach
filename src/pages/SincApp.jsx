@@ -5629,6 +5629,7 @@ function AnNutrition({ profile, logs, lifts, blocks, theme }) {
       const block = blocks?.find(b => d >= b.startDate && (!b.endDate || d < b.endDate));
       const target = block ? block.calTarget : calculateTargets(profile).calTarget;
       return { date: d, kcal: log.kcalEaten || 0, protein: log.proteinEaten || 0, fat: log.fatEaten || 0, carbs: log.carbsEaten || 0, target };
+          });
     const avgKcal = Math.round(days.reduce((s, d) => s + d.kcal, 0) / days.length);
     const avgProtein = Math.round(days.reduce((s, d) => s + d.protein, 0) / days.length);
     const avgCarbs = Math.round(days.reduce((s, d) => s + d.carbs, 0) / days.length);
