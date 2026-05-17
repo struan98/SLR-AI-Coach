@@ -7362,16 +7362,28 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
     setExercisePrefs(next);
   };
 
-  useEffect(() => {
+    useEffect(() => {
     (async () => {
-      const ptId = await storage.get(`link:${session.id}`);
-      if (ptId) {
-        const accs = await getAllAccounts();
-        const pt = Object.values(accs).find(a => a.id === ptId);
-        if (pt) setLinkedPT(pt);
-      }
+      try {
+        const sbKey = Object.keys(localStorage).find(k => k.startsWith("sb-") && k.endsWith("-auth-token"));
+        const token = sbKey ? JSON.parse(localStorage.getItem(sbKey))?.access_token : null;
+        const headers = { "apikey": SUPABASE_ANON_KEY };
+        if (token) headers["Authorization"] = "Bearer " + token;
+        // Find an active link where I'm the client
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/pt_links?select=pt_user_id&client_user_id=eq.${session.id}&status=eq.active&limit=1`, { headers });
+        if (!r.ok) return;
+        const rows = await r.json();
+        if (!rows[0]) return;
+        const ptId = rows[0].pt_user_id;
+        // Fetch the PT's profile to display their name
+        const pr = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=user_id,data&user_id=eq.${ptId}&limit=1`, { headers });
+        if (!pr.ok) return;
+        const profiles = await pr.json();
+        if (profiles[0]) setLinkedPT({ id: profiles[0].user_id, username: profiles[0].data?.username || "PT" });
+      } catch (e) { console.warn("load PT link failed", e); }
     })();
   }, [session.id]);
+
 
   const openEdit = () => {
     setEditForm({ ...profile });
@@ -7384,32 +7396,59 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
     setShowEditProfile(false);
   };
 
-  const linkPT = async () => {
+    const linkPT = async () => {
     setPtError("");
-    if (!ptUsername.trim()) { setPtError("Enter the PT's username"); return; }
-    const acc = await findAccount(ptUsername);
-    if (!acc) { setPtError("No account with that username"); return; }
-    if (acc.role !== "PT") { setPtError("That account isn't a PT"); return; }
-    await storage.set(`link:${session.id}`, acc.id);
-    const clients = (await storage.get(ptKey(acc.id, "clients"))) || [];
-    if (!clients.includes(session.id)) {
-      clients.push(session.id);
-      await storage.set(ptKey(acc.id, "clients"), clients);
+    const ptId = ptUsername.trim();
+    // Basic UUID format check (Supabase user IDs are UUIDs)
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ptId)) {
+      setPtError("Enter a valid PT user ID (UUID format)"); return;
     }
-    setLinkedPT(acc);
-    setShowPTModal(false);
-    setPtUsername("");
+    if (ptId === session.id) { setPtError("That's your own ID — you can't link to yourself"); return; }
+    try {
+      const sbKey = Object.keys(localStorage).find(k => k.startsWith("sb-") && k.endsWith("-auth-token"));
+      const token = sbKey ? JSON.parse(localStorage.getItem(sbKey))?.access_token : null;
+      const headers = { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY };
+      if (token) headers["Authorization"] = "Bearer " + token;
+      // Step 1: verify PT exists in profiles and is role=PT
+      const pr = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=user_id,data&user_id=eq.${ptId}&limit=1`, { headers });
+      const profiles = pr.ok ? await pr.json() : [];
+      if (!profiles[0]) { setPtError("No PT found with that ID"); return; }
+      if (profiles[0].data?.role !== "PT") { setPtError("That account isn't a PT"); return; }
+      // Step 2: create the link
+      const ins = await fetch(`${SUPABASE_URL}/rest/v1/pt_links`, {
+        method: "POST",
+        headers: { ...headers, "Prefer": "return=representation" },
+        body: JSON.stringify({ pt_user_id: ptId, client_user_id: session.id, status: "active" }),
+      });
+      if (!ins.ok) {
+        const txt = await ins.text();
+        console.error("link insert failed", txt);
+        setPtError("Failed to link — try again"); return;
+      }
+      setLinkedPT({ id: ptId, username: profiles[0].data?.username || "PT" });
+      setShowPTModal(false);
+      setPtUsername("");
+    } catch (e) {
+      console.error("linkPT threw", e);
+      setPtError(e.message || String(e));
+    }
   };
 
-  const unlinkPT = async () => {
+    const unlinkPT = async () => {
     if (!confirm("Remove your PT?")) return;
-    if (linkedPT) {
-      const clients = (await storage.get(ptKey(linkedPT.id, "clients"))) || [];
-      await storage.set(ptKey(linkedPT.id, "clients"), clients.filter(c => c !== session.id));
-    }
-    await storage.delete(`link:${session.id}`);
+    try {
+      const sbKey = Object.keys(localStorage).find(k => k.startsWith("sb-") && k.endsWith("-auth-token"));
+      const token = sbKey ? JSON.parse(localStorage.getItem(sbKey))?.access_token : null;
+      const headers = { "apikey": SUPABASE_ANON_KEY };
+      if (token) headers["Authorization"] = "Bearer " + token;
+      await fetch(`${SUPABASE_URL}/rest/v1/pt_links?client_user_id=eq.${session.id}`, {
+        method: "DELETE",
+        headers,
+      });
+    } catch (e) { console.warn("unlinkPT failed", e); }
     setLinkedPT(null);
   };
+
 
   return (
     <div className="pb-4">
