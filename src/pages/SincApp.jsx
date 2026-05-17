@@ -7566,11 +7566,23 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
                 <button onClick={() => { setOverrideEditing(false); setOverrideDraft(profile.targetOverrides || {}); }}
                   className={`flex-1 h-10 ${theme.surface} ${theme.surfaceText} rounded-lg font-semibold text-xs`}>Cancel</button>
                 {targets.overridden && (
-                  <button onClick={async () => {
+                                    <button onClick={async () => {
                     const next = { ...profile };
                     delete next.targetOverrides;
                     await storage.set(userKey(session.id, "profile"), next);
                     setProfile(next);
+                    // Restore active block to calculated targets (without overrides)
+                    const newTargets = calculateTargets(next);
+                    const currentBlocks = (await storage.get(userKey(session.id, "blocks"))) || [];
+                    const updatedBlocks = currentBlocks.map(b => !b.endDate ? {
+                      ...b,
+                      calTarget: newTargets.calTarget,
+                      protein: newTargets.protein,
+                      fat: newTargets.fat,
+                      carbs: newTargets.carbs,
+                    } : b);
+                    await storage.set(userKey(session.id, "blocks"), updatedBlocks);
+                    setBlocks(updatedBlocks);
                     setOverrideDraft({});
                     setOverrideEditing(false);
                   }} className="flex-1 h-10 rounded-lg font-semibold text-xs"
