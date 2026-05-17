@@ -7396,24 +7396,32 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
     setShowEditProfile(false);
   };
 
-    const linkPT = async () => {
+      const linkPT = async () => {
     setPtError("");
-    const ptId = ptUsername.trim();
-    // Basic UUID format check (Supabase user IDs are UUIDs)
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ptId)) {
-      setPtError("Enter a valid PT user ID (UUID format)"); return;
-    }
-    if (ptId === session.id) { setPtError("That's your own ID — you can't link to yourself"); return; }
+    const uname = ptUsername.trim();
+    if (uname.length < 3) { setPtError("Enter a username (3+ characters)"); return; }
     try {
       const sbKey = Object.keys(localStorage).find(k => k.startsWith("sb-") && k.endsWith("-auth-token"));
       const token = sbKey ? JSON.parse(localStorage.getItem(sbKey))?.access_token : null;
       const headers = { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY };
       if (token) headers["Authorization"] = "Bearer " + token;
-      // Step 1: verify PT exists in profiles and is role=PT
-      const pr = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=user_id,data&user_id=eq.${ptId}&limit=1`, { headers });
-      const profiles = pr.ok ? await pr.json() : [];
-      if (!profiles[0]) { setPtError("No PT found with that ID"); return; }
-      if (profiles[0].data?.role !== "PT") { setPtError("That account isn't a PT"); return; }
+      // Step 1: look up PT by username via RPC function
+      const lookup = await fetch(`${SUPABASE_URL}/rest/v1/rpc/find_user_by_username`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ p_username: uname }),
+      });
+      if (!lookup.ok) {
+        const txt = await lookup.text();
+        console.error("username lookup failed", txt);
+        setPtError("Lookup failed — try again"); return;
+      }
+      const found = await lookup.json();
+      if (!found[0]) { setPtError("No user with that username"); return; }
+      const ptId = found[0].user_id;
+      const ptRole = found[0].role;
+      if (ptId === session.id) { setPtError("That's you — can't link to yourself"); return; }
+      if (ptRole !== "PT") { setPtError("That account isn't a trainer"); return; }
       // Step 2: create the link
       const ins = await fetch(`${SUPABASE_URL}/rest/v1/pt_links`, {
         method: "POST",
@@ -7425,7 +7433,7 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
         console.error("link insert failed", txt);
         setPtError("Failed to link — try again"); return;
       }
-      setLinkedPT({ id: ptId, username: profiles[0].data?.username || "PT" });
+      setLinkedPT({ id: ptId, username: uname });
       setShowPTModal(false);
       setPtUsername("");
     } catch (e) {
@@ -7433,6 +7441,7 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
       setPtError(e.message || String(e));
     }
   };
+
 
     const unlinkPT = async () => {
     if (!confirm("Remove your PT?")) return;
@@ -7770,11 +7779,10 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
 
       </div>
 
-            {showPTModal && (
+               {showPTModal && (
         <Modal title="Link a PT" onClose={() => setShowPTModal(false)} theme={theme}>
-          <p className={`text-sm ${theme.textMuted} mb-3`}>Paste your PT's user ID below. They can find theirs in Settings → Your user ID.</p>
-          <p className={`text-xs ${theme.textMuted} mb-3`}>The ID looks like <span className="font-mono">xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</span>.</p>
-          <TextInput label="PT user ID" value={ptUsername} setValue={setPtUsername} theme={theme} placeholder="paste UUID" />
+          <p className={`text-sm ${theme.textMuted} mb-3`}>Enter your PT's username. They'll be able to see your progress and adjust your training.</p>
+          <TextInput label="PT username" value={ptUsername} setValue={setPtUsername} theme={theme} placeholder="e.g. coach_dave" />
           {ptError && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 mb-3">{ptError}</div>}
           <button onClick={linkPT} className="w-full h-12 text-white rounded-xl font-semibold" style={{ backgroundColor: ORANGE }}>Link PT</button>
         </Modal>
