@@ -1181,14 +1181,38 @@ function Auth({ themeCtx }) {
   const [mode, setMode] = useState("login");
   const [role, setRole] = useState("user");
 
-    const tryLogin = async () => {
+      const tryLogin = async () => {
     setErr(""); setLoading(true);
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-      console.log("[tryLogin] result", { hasData: !!data, hasSession: !!data?.session, error });
-      if (error) { setErr(error.message); setLoading(false); return; }
-      // Force a page reload — the auth state should now be persisted to localStorage
-      // and the boot flow will pick it up cleanly.
+      // Raw fetch — supabase-js hangs intermittently on iOS Safari
+      const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      const data = await r.json();
+      console.log("[tryLogin] status", r.status, "hasToken", !!data?.access_token);
+      if (!r.ok) {
+        setErr(data?.error_description || data?.msg || data?.error || "Login failed");
+        setLoading(false);
+        return;
+      }
+      // Store the session in the same localStorage shape Supabase uses,
+      // so the next page load picks it up automatically.
+      const projectRef = "vtvfnlvphdobrkcvkage";
+      const storageKey = `sb-${projectRef}-auth-token`;
+      localStorage.setItem(storageKey, JSON.stringify({
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+        expires_in: data.expires_in,
+        expires_at: Math.floor(Date.now() / 1000) + (data.expires_in || 3600),
+        token_type: "bearer",
+        user: data.user,
+      }));
+      // Reload — boot flow finds the session and routes you in
       window.location.href = window.location.pathname;
     } catch (e) {
       console.error("[tryLogin] threw", e);
@@ -1196,7 +1220,6 @@ function Auth({ themeCtx }) {
       setLoading(false);
     }
   };
-
 
     const trySignup = async () => {
     setErr("");
