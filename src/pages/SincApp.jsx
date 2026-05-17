@@ -1172,16 +1172,22 @@ function Auth({ themeCtx }) {
   const [mode, setMode] = useState("login");
   const [role, setRole] = useState("user");
 
-  const tryLogin = async () => {
+    const tryLogin = async () => {
     setErr(""); setLoading(true);
-    // Fire signIn but don't await — Supabase's response hangs intermittently.
-    // The onAuthStateChange listener in SINCApp will detect the new session and route us in.
-    supabase.auth.signInWithPassword({ email: email.trim(), password })
-      .then(({ error }) => { if (error) { setErr(error.message); setLoading(false); } })
-      .catch(e => { setErr(e.message || String(e)); setLoading(false); });
-    // Safety: if the auth listener doesn't fire within 6s, unstick the button so user can retry
-    setTimeout(() => setLoading(false), 6000);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      console.log("[tryLogin] result", { hasData: !!data, hasSession: !!data?.session, error });
+      if (error) { setErr(error.message); setLoading(false); return; }
+      // Force a page reload — the auth state should now be persisted to localStorage
+      // and the boot flow will pick it up cleanly.
+      window.location.href = window.location.pathname;
+    } catch (e) {
+      console.error("[tryLogin] threw", e);
+      setErr(e.message || String(e));
+      setLoading(false);
+    }
   };
+
 
     const trySignup = async () => {
     setErr("");
