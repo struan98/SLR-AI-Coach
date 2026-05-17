@@ -3815,8 +3815,8 @@ function History({ session, profile, themeCtx, hideHeader }) {
                       <div className={`px-4 pb-4 space-y-1.5 border-t ${theme.border} pt-3`}>
                         {b.blockDays.length === 0 ? (
                           <div className={`text-xs ${theme.textMuted} text-center py-2`}>No logged days in this block.</div>
-                        ) : b.blockDays.slice(0, 14).map(d => {
-                          const log = logs[d];
+                                                }) : b.blockDays.slice(0, 14).map(d => {
+                          const log = { kcalEaten: 0, proteinEaten: 0, fatEaten: 0, carbsEaten: 0, ...(logs[d] || {}) };
                           const diff = log.kcalEaten - b.calTarget;
                           // Goal-aware colouring
                           // - Cut: under target = good (green), at target = good, over = bad (red)
