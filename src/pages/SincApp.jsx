@@ -7758,10 +7758,16 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
           )}
         </div>
 
+               <div className={`w-full p-3 ${theme.surface} ${theme.surfaceText} rounded-xl`}>
+          <div className={`text-[10px] font-bold uppercase tracking-wide ${theme.textMuted} mb-1`}>Your user ID</div>
+          <div className="text-[11px] font-mono break-all mb-2">{session.id}</div>
+          <button onClick={() => { navigator.clipboard?.writeText(session.id); }} className="text-xs font-semibold" style={{ color: ORANGE }}>Tap to copy</button>
+        </div>
         <button onClick={toggle} className={`w-full h-12 ${theme.surface} ${theme.surfaceText} rounded-xl font-semibold text-sm`}>
           {dark ? "☀️  Light mode" : "🌙  Dark mode"}
         </button>
         <button onClick={onLogout} className={`w-full h-12 ${theme.surface} ${theme.surfaceText} rounded-xl font-semibold`}>Log out</button>
+
       </div>
 
             {showPTModal && (
