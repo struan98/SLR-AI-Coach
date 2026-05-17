@@ -59,12 +59,21 @@ async function supaGet(userId, subkey) {
 
 async function supaSet(userId, subkey, value) {
   try {
-    const { error } = await supabase
+    console.log("[supaSet] writing", { userId, subkey, hasValue: !!value });
+    const { data, error } = await supabase
       .from("user_data")
-      .upsert({ user_id: userId, key: subkey, data: value }, { onConflict: "user_id,key" });
-    if (error) { console.warn("supaSet error", subkey, error); return false; }
+      .upsert({ user_id: userId, key: subkey, data: value }, { onConflict: "user_id,key" })
+      .select();
+    if (error) {
+      console.error("[supaSet] ERROR", subkey, error.message, error);
+      return false;
+    }
+    console.log("[supaSet] wrote OK", subkey, data);
     return true;
-  } catch (e) { console.warn("supaSet threw", e); return false; }
+  } catch (e) {
+    console.error("[supaSet] threw", subkey, e);
+    return false;
+  }
 }
 
 async function supaDelete(userId, subkey) {
