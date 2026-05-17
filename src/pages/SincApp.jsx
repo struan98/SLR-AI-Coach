@@ -1,50 +1,203 @@
 import { useState, useEffect, useMemo } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 // ============================================================
-// STORAGE
+// SUPABASE CLIENT
 // ============================================================
-// In-memory fallback when window.storage is unavailable or broken
-const memStore = {};
-let useMemFallback = false;
+const SUPABASE_URL = "https://vtvfnlvphdobrkcvkage.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ0dmZubHZwaGRvYnJrY3ZrYWdlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg5MTYyMjQsImV4cCI6MjA5NDQ5MjIyNH0.Cruk0OnV5x43SavREvzJEMo29rYJCjMXDZaEeYauNrM";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true },
+});
+
+// ============================================================
+// STORAGE — Supabase-backed with in-memory cache + optimistic writes
+// ============================================================
+const DEVICE_ONLY_KEYS = new Set(["sinc-session", "sinc-theme", "sinc-seed-v10", "dark", "light"]);
+const cache = new Map();
+let currentAuthUserId = null;
+
+function getDeviceStore() {
+  try { return JSON.parse(localStorage.getItem("__sinc_device") || "{}"); }
+  catch { return {}; }
+}
+function setDeviceStore(obj) {
+  try { localStorage.setItem("__sinc_device", JSON.stringify(obj)); } catch {}
+}
+
+function parseKey(key) {
+  if (key.startsWith("u:")) {
+    const rest = key.slice(2);
+    const idx = rest.indexOf(":");
+    if (idx === -1) return null;
+    return { userId: rest.slice(0, idx), subkey: rest.slice(idx + 1) };
+  }
+  if (key.startsWith("pt:")) {
+    const rest = key.slice(3);
+    const idx = rest.indexOf(":");
+    if (idx === -1) return null;
+    return { userId: rest.slice(0, idx), subkey: "pt:" + rest.slice(idx + 1) };
+  }
+  if (key.startsWith("link:")) {
+    return { userId: key.slice(5), subkey: "link" };
+  }
+  return null;
+}
+
+async function supaGet(userId, subkey) {
+  try {
+    const { data, error } = await supabase
+      .from("user_data")
+      .select("data")
+      .eq("user_id", userId)
+      .eq("key", subkey)
+      .maybeSingle();
+    if (error) { console.warn("supaGet error", subkey, error); return null; }
+    return data ? data.data : null;
+  } catch (e) { console.warn("supaGet threw", e); return null; }
+}
+
+async function supaSet(userId, subkey, value) {
+  try {
+    const { error } = await supabase
+      .from("user_data")
+      .upsert({ user_id: userId, key: subkey, data: value }, { onConflict: "user_id,key" });
+    if (error) { console.warn("supaSet error", subkey, error); return false; }
+    return true;
+  } catch (e) { console.warn("supaSet threw", e); return false; }
+}
+
+async function supaDelete(userId, subkey) {
+  try {
+    const { error } = await supabase
+      .from("user_data")
+      .delete()
+      .eq("user_id", userId)
+      .eq("key", subkey);
+    if (error) { console.warn("supaDelete error", subkey, error); return false; }
+    return true;
+  } catch (e) { console.warn("supaDelete threw", e); return false; }
+}
+
+async function supaListSubkeys(userId, prefix) {
+  try {
+    const { data, error } = await supabase
+      .from("user_data")
+      .select("key")
+      .eq("user_id", userId)
+      .like("key", `${prefix}%`);
+    if (error) { console.warn("supaListSubkeys error", error); return []; }
+    return data ? data.map(r => r.key) : [];
+  } catch (e) { console.warn("supaListSubkeys threw", e); return []; }
+}
 
 const storage = {
   async get(key) {
-    if (useMemFallback) return memStore[key] !== undefined ? memStore[key] : null;
-    try {
-      const r = await window.storage.get(key);
-      if (!r) return null;
-      if (typeof r.value === "string") {
-        try { return JSON.parse(r.value); } catch { return r.value; }
-      }
-      return r.value;
-    } catch { return null; }
+    if (cache.has(key)) return cache.get(key);
+    if (DEVICE_ONLY_KEYS.has(key)) {
+      const ds = getDeviceStore();
+      const v = ds[key] !== undefined ? ds[key] : null;
+      cache.set(key, v);
+      return v;
+    }
+    const parsed = parseKey(key);
+    if (parsed) {
+      const v = await supaGet(parsed.userId, parsed.subkey);
+      cache.set(key, v);
+      return v;
+    }
+    if (currentAuthUserId) {
+      const v = await supaGet(currentAuthUserId, `global:${key}`);
+      cache.set(key, v);
+      return v;
+    }
+    const ds = getDeviceStore();
+    const v = ds[key] !== undefined ? ds[key] : null;
+    cache.set(key, v);
+    return v;
   },
   async set(key, value) {
-    if (useMemFallback) { memStore[key] = value; return true; }
-    try {
-      const json = typeof value === "string" ? value : JSON.stringify(value);
-      await window.storage.set(key, json);
-      return true;
-    } catch (e) {
-      // Switch to memory fallback for the rest of this session
-      window.__sincLastError = `key="${key}" err=${e?.message || String(e)}`;
-      console.error("Storage set threw, switching to memory fallback:", key, e);
-      useMemFallback = true;
-      memStore[key] = value;
+    cache.set(key, value);
+    if (DEVICE_ONLY_KEYS.has(key)) {
+      const ds = getDeviceStore();
+      ds[key] = value;
+      setDeviceStore(ds);
       return true;
     }
+    const parsed = parseKey(key);
+    if (parsed) {
+      supaSet(parsed.userId, parsed.subkey, value);
+      return true;
+    }
+    if (currentAuthUserId) {
+      supaSet(currentAuthUserId, `global:${key}`, value);
+      return true;
+    }
+    const ds = getDeviceStore();
+    ds[key] = value;
+    setDeviceStore(ds);
+    return true;
   },
   async delete(key) {
-    if (useMemFallback) { delete memStore[key]; return true; }
-    try { await window.storage.delete(key); return true; } catch { return false; }
+    cache.delete(key);
+    if (DEVICE_ONLY_KEYS.has(key)) {
+      const ds = getDeviceStore();
+      delete ds[key];
+      setDeviceStore(ds);
+      return true;
+    }
+    const parsed = parseKey(key);
+    if (parsed) {
+      supaDelete(parsed.userId, parsed.subkey);
+      return true;
+    }
+    if (currentAuthUserId) {
+      supaDelete(currentAuthUserId, `global:${key}`);
+      return true;
+    }
+    const ds = getDeviceStore();
+    delete ds[key];
+    setDeviceStore(ds);
+    return true;
   },
   async list(prefix) {
-    if (useMemFallback) return Object.keys(memStore).filter(k => k.startsWith(prefix || ""));
-    try { const r = await window.storage.list(prefix); return r?.keys || []; } catch { return []; }
+    const p = prefix || "";
+    if (p.startsWith("u:")) {
+      const rest = p.slice(2);
+      const colonIdx = rest.indexOf(":");
+      if (colonIdx === -1) return [];
+      const userId = rest.slice(0, colonIdx);
+      const subprefix = rest.slice(colonIdx + 1);
+      const subkeys = await supaListSubkeys(userId, subprefix);
+      return subkeys.map(sk => `u:${userId}:${sk}`);
+    }
+    if (p.startsWith("pt:")) {
+      const rest = p.slice(3);
+      const colonIdx = rest.indexOf(":");
+      if (colonIdx === -1) return [];
+      const userId = rest.slice(0, colonIdx);
+      const subprefix = "pt:" + rest.slice(colonIdx + 1);
+      const subkeys = await supaListSubkeys(userId, subprefix);
+      return subkeys.map(sk => `pt:${userId}:${sk.slice(3)}`);
+    }
+    if (currentAuthUserId) {
+      const subkeys = await supaListSubkeys(currentAuthUserId, `global:${p}`);
+      return subkeys.map(sk => sk.slice("global:".length));
+    }
+    const ds = getDeviceStore();
+    return Object.keys(ds).filter(k => k.startsWith(p));
   },
 };
 const userKey = (id, k) => `u:${id}:${k}`;
 const ptKey = (id, k) => `pt:${id}:${k}`;
+
+supabase.auth.onAuthStateChange((_event, session) => {
+  const newId = session?.user?.id || null;
+  if (newId !== currentAuthUserId) {
+    cache.clear();
+    currentAuthUserId = newId;
+  }
+});
 
 // ============================================================
 // THEME — Navy + Orange + White, with dark mode
@@ -720,56 +873,15 @@ function buildSessionCompletions(daysPerWeek, splitName) {
 }
 
 async function seedDemo(setStatus) {
-  // Test storage with a trivial write/read. If it falls back to memory, that's fine.
-  setStatus("Testing storage...");
-  await storage.set("sinc-test", { hello: "world" });
-  const testRead = await storage.get("sinc-test");
-  if (!testRead || testRead.hello !== "world") {
-    setStatus("Storage completely unavailable");
-    throw new Error("Storage not working even with fallback");
-  }
-  await storage.delete("sinc-test");
-
-  // Already seeded? (versioned so updates re-seed)
-  const existingPT = await storage.get("account:coach_dave");
-  const existingJames = await storage.get("account:james");
-  const seedV = await storage.get("sinc-seed-v");
-  if (existingPT && existingJames && seedV === "v10") {
-    setStatus(useMemFallback ? "Ready (session-only)" : "Ready");
-    return true;
-  }
-
-  setStatus("Setting up demo...");
-  await storage.set("account:coach_dave", PT);
-  for (const c of DEMO_CLIENTS) {
-    setStatus(`Loading ${c.profile.name}...`);
-    await storage.set(`account:${c.username}`, { id: c.id, username: c.username, password: "demo", role: "user" });
-    await storage.set(userKey(c.id, "profile"), c.profile);
-    await storage.set(`link:${c.id}`, PT.id);
-    await storage.set(userKey(c.id, "logs"), buildLogs(c));
-    // Test data: rich lift history that triggers every progression suggestion type
-    await storage.set(userKey(c.id, "lifts"), buildTestLifts());
-    // Session completions for the past 4 weeks (drives adherence + recovery scores)
-    await storage.set(userKey(c.id, "session-completions"), buildSessionCompletions(c.profile.daysPerWeek, c.profile.split));
-    // Reset suggestions store so the engine re-evaluates fresh on first load
-    await storage.set(userKey(c.id, "suggestions"), { pending: [], accepted: [], rejected: [], lastMonthly: null });
-    // Reset plan-overrides
-    await storage.set(userKey(c.id, "plan-overrides"), { setOverrides: {}, weightHints: {}, repHints: {}, swapList: [], volumeNudges: {} });
-  }
-  await storage.set(ptKey(PT.id, "clients"), DEMO_CLIENTS.map(c => c.id));
-  // Seed a demo PT note from coach_dave to james (visible on his Home)
-  await storage.set(userKey("u_james", "pt-note"), "Strong push on bench last week — let's chase 100kg this block. Make sure protein hits 180g on training days, you've been short. Keep steps at 10k.");
-  await storage.set("sinc-seed-v", "v10");
-  setStatus(useMemFallback ? "Ready (session-only)" : "Ready");
+  if (setStatus) setStatus("Ready");
   return true;
 }
 
-async function findAccount(u) { return await storage.get(`account:${u.toLowerCase()}`); }
+async function findAccount(u) {
+  return null;
+}
 async function getAllAccounts() {
-  const keys = await storage.list("account:");
-  const result = {};
-  for (const k of keys) { const a = await storage.get(k); if (a) result[a.username] = a; }
-  return result;
+  return {};
 }
 
 // ============================================================
@@ -955,86 +1067,125 @@ function evaluateTreatWeek(currentBank, logs, profile, treat) {
 // MAIN APP
 // ============================================================
 export default function SINCApp() {
-  const [seeding, setSeeding] = useState(true);
-  const [status, setStatus] = useState("Initialising");
+  const [booting, setBooting] = useState(true);
   const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
   const themeCtx = useTheme();
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      try { await seedDemo(setStatus); }
-      catch (e) { setStatus(`Error: ${e.message}`); return; }
-      const s = await storage.get("sinc-session");
-      if (s) setSession(s);
-      setSeeding(false);
+      const { data: { session: supaSession } } = await supabase.auth.getSession();
+      if (cancelled) return;
+      if (supaSession?.user) {
+        await loadSession(supaSession);
+      }
+      setBooting(false);
     })();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, supaSession) => {
+      if (cancelled) return;
+      if (supaSession?.user) {
+        await loadSession(supaSession);
+      } else {
+        setSession(null);
+        setProfile(null);
+      }
+    });
+    return () => { cancelled = true; subscription.unsubscribe(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (seeding) {
+  async function loadSession(supaSession) {
+    const u = supaSession.user;
+    const { data: profileRow } = await supabase
+      .from("profiles")
+      .select("data")
+      .eq("user_id", u.id)
+      .maybeSingle();
+    const profileData = profileRow?.data || {};
+    const username = profileData.username || u.email?.split("@")[0] || "user";
+    const role = profileData.role || "user";
+    setSession({ id: u.id, username, role });
+    setProfile(profileData);
+  }
+
+  if (booting) {
     const isLight = !themeCtx.theme.bg.includes("950");
     return (
       <div className={`min-h-screen ${themeCtx.theme.bg} flex items-center justify-center px-5`}>
         <div className="text-center">
           <Wordmark height={64} inverted={isLight} />
-          <div className={`mt-6 text-sm ${themeCtx.theme.textMuted}`}>{status}</div>
+          <div className={`mt-6 text-sm ${themeCtx.theme.textMuted}`}>Loading...</div>
           <div className="mt-3 w-8 h-8 border-3 border-slate-200 rounded-full animate-spin mx-auto" style={{ borderTopColor: ORANGE }} />
         </div>
       </div>
     );
   }
 
-  if (!session) return <Auth themeCtx={themeCtx} onAuth={async acc => { await storage.set("sinc-session", { id: acc.id, username: acc.username, role: acc.role }); setSession({ id: acc.id, username: acc.username, role: acc.role }); }} />;
+  if (!session) return <Auth themeCtx={themeCtx} />;
 
-  const handleLogout = async () => { await storage.delete("sinc-session"); setSession(null); };
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+    setProfile(null);
+  };
   if (session.role === "PT") return <PTApp session={session} themeCtx={themeCtx} onLogout={handleLogout} />;
   return <UserApp session={session} themeCtx={themeCtx} onLogout={handleLogout} />;
 }
 
 // ============================================================
-// AUTH
+// AUTH — Supabase email + password
 // ============================================================
-function Auth({ themeCtx, onAuth }) {
+function Auth({ themeCtx }) {
   const { theme, dark, toggle } = themeCtx;
-  const [u, setU] = useState(""); const [p, setP] = useState(""); const [p2, setP2] = useState(""); const [err, setErr] = useState("");
-  const [mode, setMode] = useState("quick"); // quick | login | signup
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [password2, setPassword2] = useState("");
+  const [username, setUsername] = useState("");
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState("login");
   const [role, setRole] = useState("user");
-  const tryLogin = async (un, pw) => {
-    setErr("");
+
+  const tryLogin = async () => {
+    setErr(""); setLoading(true);
     try {
-      const acc = await findAccount(un);
-      if (!acc) {
-        // Check if any accounts exist at all
-        const all = await storage.list("account:");
-        if (all.length === 0) {
-          setErr(`No accounts in storage. Try Reset & reload.`);
-        } else {
-          setErr(`No account "${un}" — found ${all.length} other accounts.`);
-        }
-        return;
-      }
-      if (acc.password !== pw) { setErr("Wrong password"); return; }
-      onAuth(acc);
-    } catch (e) {
-      setErr(`Login error: ${e.message || e}`);
-    }
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error) setErr(error.message);
+    } catch (e) { setErr(e.message || String(e)); }
+    setLoading(false);
   };
+
   const trySignup = async () => {
     setErr("");
-    if (!u.trim() || u.length < 3) { setErr("Username must be 3+ characters"); return; }
-    if (p.length < 4) { setErr("Password must be 4+ characters"); return; }
-    if (p !== p2) { setErr("Passwords don't match"); return; }
-    const exists = await findAccount(u);
-    if (exists) { setErr("Username already taken"); return; }
-    const id = `${role}_${Date.now()}`;
-    const acc = { id, username: u.toLowerCase(), password: p, role, createdAt: new Date().toISOString() };
-    await storage.set(`account:${u.toLowerCase()}`, acc);
-    onAuth(acc);
+    if (!email.includes("@")) { setErr("Enter a valid email"); return; }
+    if (password.length < 6) { setErr("Password must be 6+ characters"); return; }
+    if (password !== password2) { setErr("Passwords don't match"); return; }
+    if (!username.trim() || username.length < 3) { setErr("Username must be 3+ characters"); return; }
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: { data: { username: username.toLowerCase(), role } },
+      });
+      if (error) { setErr(error.message); setLoading(false); return; }
+      if (data?.user) {
+        await supabase
+          .from("profiles")
+          .upsert({
+            user_id: data.user.id,
+            data: { username: username.toLowerCase(), role, createdAt: new Date().toISOString() },
+          }, { onConflict: "user_id" });
+      }
+    } catch (e) { setErr(e.message || String(e)); }
+    setLoading(false);
   };
+
   return (
     <div className={`min-h-screen ${theme.bg}`}>
       <div className="max-w-md mx-auto">
         <div className="relative overflow-hidden text-white" style={{ background: `linear-gradient(135deg, ${theme.headerStart}, ${theme.headerEnd})` }}>
-          {/* Hero photo, blended */}
           <div className="absolute inset-0" style={{
             backgroundImage: `url(${HERO_SPRINTER_B64})`,
             backgroundSize: "cover",
@@ -1042,97 +1193,61 @@ function Auth({ themeCtx, onAuth }) {
             opacity: 0.45,
             mixBlendMode: "luminosity",
           }} />
-          {/* Gradient overlay for text legibility */}
           <div className="absolute inset-0" style={{
             background: `linear-gradient(180deg, ${theme.headerStart}99 0%, ${theme.headerStart}cc 60%, ${theme.headerEnd} 100%)`,
           }} />
           <div className="relative px-5 pt-16 pb-12">
             <div className="flex justify-center mb-3"><Wordmark height={88} /></div>
-            <div className="w-12 h-0.5 mx-auto mt-3" style={{ backgroundColor: ORANGE }} />
-            <p className="text-blue-100 text-sm text-center mt-3 italic font-light">Smarter Training. Tailored for You.</p>
+            <p className="text-center text-sm text-white/80">Train smart. Eat right. Recover.</p>
           </div>
         </div>
-        <div className="px-4 pt-3 space-y-3 pb-8">
-          {/* Mode tabs */}
-          <div className={`${theme.card} rounded-2xl shadow-md border ${theme.border} p-1.5 grid grid-cols-3 gap-1`}>
-            {[{ id: "quick", l: "Demo" }, { id: "login", l: "Log in" }, { id: "signup", l: "Sign up" }].map(m => (
-              <button key={m.id} onClick={() => { setMode(m.id); setErr(""); }} className="h-11 rounded-lg font-semibold text-sm transition-all"
-                style={{ backgroundColor: mode === m.id ? NAVY : "transparent", color: mode === m.id ? "white" : theme.text === "text-slate-100" ? "#cbd5e1" : "#475569" }}>
-                {m.l}
+        <div className="px-5 -mt-6 relative z-10">
+          <div className={`${theme.card} rounded-2xl ${theme.border} border shadow-xl p-5`}>
+            <div className="flex gap-2 mb-4">
+              <button onClick={() => setMode("login")} className={`flex-1 py-2 rounded-lg text-sm font-bold ${mode === "login" ? "" : theme.textMuted}`}
+                style={mode === "login" ? { background: ORANGE, color: "white" } : { background: "transparent" }}>Log in</button>
+              <button onClick={() => setMode("signup")} className={`flex-1 py-2 rounded-lg text-sm font-bold ${mode === "signup" ? "" : theme.textMuted}`}
+                style={mode === "signup" ? { background: ORANGE, color: "white" } : { background: "transparent" }}>Sign up</button>
+            </div>
+            <div className="space-y-3">
+              <TextInput label="Email" value={email} setValue={setEmail} placeholder="you@example.com" type="email" theme={theme} />
+              <TextInput label="Password" value={password} setValue={setPassword} placeholder="6+ characters" type="password" theme={theme} />
+              {mode === "signup" && (
+                <>
+                  <TextInput label="Confirm password" value={password2} setValue={setPassword2} placeholder="Repeat password" type="password" theme={theme} />
+                  <TextInput label="Username" value={username} setValue={setUsername} placeholder="e.g. james" theme={theme} />
+                  <div>
+                    <div className={`text-xs font-bold mb-2 ${theme.textMuted}`}>I AM A</div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setRole("user")} className={`flex-1 py-2 rounded-lg text-sm font-bold`}
+                        style={role === "user" ? { background: ORANGE, color: "white" } : { background: "transparent", border: `1px solid ${theme.borderColor || "#cbd5e1"}` }}>Client</button>
+                      <button onClick={() => setRole("PT")} className={`flex-1 py-2 rounded-lg text-sm font-bold`}
+                        style={role === "PT" ? { background: ORANGE, color: "white" } : { background: "transparent", border: `1px solid ${theme.borderColor || "#cbd5e1"}` }}>Trainer</button>
+                    </div>
+                  </div>
+                </>
+              )}
+              {err && <div className="text-sm" style={{ color: STATUS_BAD }}>{err}</div>}
+              <button
+                onClick={mode === "login" ? tryLogin : trySignup}
+                disabled={loading}
+                className="w-full py-3 rounded-lg font-bold text-white"
+                style={{ background: ORANGE, opacity: loading ? 0.6 : 1 }}>
+                {loading ? "Please wait..." : (mode === "login" ? "Log in" : "Create account")}
               </button>
-            ))}
+            </div>
           </div>
-
-          {mode === "quick" && (
-            <div className={`${theme.card} rounded-2xl shadow-lg border ${theme.border} p-5`}>
-              <h3 className={`text-sm font-semibold mb-1 ${theme.text}`}>Quick demo login</h3>
-              <p className={`text-xs ${theme.textMuted} mb-3`}>Password: <span className="font-mono font-bold" style={{ color: ORANGE }}>demo</span></p>
-              <div className="space-y-2">
-                <button onClick={() => tryLogin("coach_dave", "demo")} className="w-full p-3.5 rounded-xl text-left active:opacity-80" style={{ background: `linear-gradient(135deg, ${NAVY}, #1e3a5f)` }}>
-                  <div className="font-semibold text-sm text-white flex items-center gap-2">👤 coach_dave <span className="text-[10px] font-bold tracking-wide px-1.5 py-0.5 rounded" style={{ backgroundColor: ORANGE }}>PT</span></div>
-                  <div className="text-xs mt-0.5 text-blue-200">Coach dashboard · 3 active clients</div>
-                </button>
-                {[{ u: "james", l: "James", d: "Cut · 6 weeks of data" }, { u: "sarah", l: "Sarah", d: "Recomp · beginner" }, { u: "mike", l: "Mike", d: "Lean Bulk · advanced" }].map(o => (
-                  <button key={o.u} onClick={() => tryLogin(o.u, "demo")} className={`w-full p-3 rounded-xl ${theme.surface} ${theme.surfaceText} active:opacity-70 text-left`}>
-                    <div className="font-semibold text-sm">{o.l}</div>
-                    <div className="text-xs mt-0.5 opacity-70">{o.d}</div>
-                  </button>
-                ))}
-              </div>
-              {err && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 mt-3">{err}</div>}
-            </div>
-          )}
-
-          {mode === "login" && (
-            <div className={`${theme.card} rounded-2xl shadow-sm border ${theme.border} p-5`}>
-              <h3 className={`text-sm font-semibold mb-3 ${theme.text}`}>Log in to your account</h3>
-              <TextInput label="Username" value={u} setValue={setU} theme={theme} placeholder="username" />
-              <TextInput label="Password" value={p} setValue={setP} type="password" theme={theme} placeholder="••••••" />
-              {err && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 mb-3">{err}</div>}
-              <button onClick={() => tryLogin(u.trim(), p)} className="w-full h-12 text-white rounded-xl font-semibold" style={{ backgroundColor: ORANGE }}>Log in</button>
-            </div>
-          )}
-
-          {mode === "signup" && (
-            <div className={`${theme.card} rounded-2xl shadow-sm border ${theme.border} p-5`}>
-              <h3 className={`text-sm font-semibold mb-3 ${theme.text}`}>Create your account</h3>
-              <div className="mb-4">
-                <label className={`block text-sm font-medium ${theme.textSubtle} mb-1.5`}>Account type</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => setRole("user")} className="h-12 rounded-lg font-medium text-sm"
-                    style={{ backgroundColor: role === "user" ? NAVY : "", color: role === "user" ? "white" : "" }}>
-                    <div className={role === "user" ? "" : `${theme.surface} ${theme.surfaceText} h-full flex items-center justify-center rounded-lg`}>User</div>
-                  </button>
-                  <button onClick={() => setRole("PT")} className="h-12 rounded-lg font-medium text-sm"
-                    style={{ backgroundColor: role === "PT" ? NAVY : "", color: role === "PT" ? "white" : "" }}>
-                    <div className={role === "PT" ? "" : `${theme.surface} ${theme.surfaceText} h-full flex items-center justify-center rounded-lg`}>Personal Trainer</div>
-                  </button>
-                </div>
-                {role === "PT" && <p className={`text-xs ${theme.textMuted} mt-2`}>PTs can see linked clients and adjust their plans.</p>}
-              </div>
-              <TextInput label="Username" value={u} setValue={setU} theme={theme} placeholder="3+ characters" />
-              <TextInput label="Password" value={p} setValue={setP} type="password" theme={theme} placeholder="4+ characters" />
-              <TextInput label="Confirm password" value={p2} setValue={setP2} type="password" theme={theme} placeholder="re-enter password" />
-              {err && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 mb-3">{err}</div>}
-              <button onClick={trySignup} className="w-full h-12 text-white rounded-xl font-semibold" style={{ backgroundColor: ORANGE }}>Create account</button>
-            </div>
-          )}
-
-          <button onClick={toggle} className={`w-full h-11 ${theme.surface} ${theme.surfaceText} rounded-xl text-xs font-semibold`}>
-            {dark ? "☀️  Switch to light mode" : "🌙  Switch to dark mode"}
-          </button>
-          <button onClick={async () => {
-            const keys = await storage.list("");
-            for (const k of keys) await storage.delete(k);
-            window.location.reload();
-          }} className="w-full h-10 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs font-semibold">
-            Reset all data & reload
-          </button>
+          <div className="text-center mt-6 pb-8">
+            <button onClick={toggle} className={`text-xs ${theme.textMuted}`}>
+              {dark ? "☀️ Light mode" : "🌙 Dark mode"}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
 
 // ============================================================
 // ONBOARDING
