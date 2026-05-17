@@ -7362,45 +7362,7 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
     setExercisePrefs(next);
   };
 
-      useEffect(() => {
-    (async () => {
-      try {
-        // Step 1: read linked client IDs from pt_links
-        const sbKey = Object.keys(localStorage).find(k => k.startsWith("sb-") && k.endsWith("-auth-token"));
-        const token = sbKey ? JSON.parse(localStorage.getItem(sbKey))?.access_token : null;
-        const headers = { "apikey": SUPABASE_ANON_KEY };
-        if (token) headers["Authorization"] = "Bearer " + token;
-        const linksRes = await fetch(`${SUPABASE_URL}/rest/v1/pt_links?select=client_user_id&pt_user_id=eq.${session.id}&status=eq.active`, { headers });
-        const links = linksRes.ok ? await linksRes.json() : [];
-        const ids = links.map(l => l.client_user_id);
-        // Step 2: for each client, fetch profile + recent logs via raw fetch (RLS lets PT read these via is_pt_of)
-        const all = await Promise.all(ids.map(async id => {
-          // Fetch client's profile row (in our schema profiles is the auth-trigger row; the editable profile is in user_data with key='profile')
-          const profileRow = await supaGet(id, "profile");
-          if (!profileRow) return null;
-          // Fetch username from profiles table
-          const pr = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=data&user_id=eq.${id}&limit=1`, { headers });
-          const profArr = pr.ok ? await pr.json() : [];
-          const username = profArr[0]?.data?.username || "client";
-          const logs = (await supaGet(id, "logs")) || {};
-          const dates = Object.keys(logs).sort().reverse();
-          let latest = null, days7 = 0, weekAgo = null;
-          for (let i = 0; i < Math.min(7, dates.length); i++) {
-            if (logs[dates[i]]?.food) days7++;
-            if (latest === null && logs[dates[i]]?.weight) latest = logs[dates[i]].weightValue;
-          }
-          for (let i = 6; i < Math.min(14, dates.length); i++) {
-            if (logs[dates[i]]?.weight) { weekAgo = logs[dates[i]].weightValue; break; }
-          }
-          return { id, username, profile: profileRow, latest, days7, weekAgo };
-        }));
-        setClients(all.filter(Boolean));
-      } catch (e) {
-        console.error("PTList load failed", e);
-      }
-      setLoading(false);
-    })();
-  }, [session.id]);
+      
 
   const openEdit = () => {
     setEditForm({ ...profile });
@@ -8179,27 +8141,38 @@ function PTList({ session, themeCtx, onLogout, onPick }) {
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+    useEffect(() => {
     (async () => {
-      const ids = (await storage.get(ptKey(session.id, "clients"))) || [];
-      const accs = await getAllAccounts();
-      const all = await Promise.all(ids.map(async id => {
-        const profile = await storage.get(userKey(id, "profile"));
-        if (!profile) return null;
-        const logs = (await storage.get(userKey(id, "logs"))) || {};
-        const dates = Object.keys(logs).sort().reverse();
-        let latest = null, days7 = 0, weekAgo = null;
-        for (let i = 0; i < Math.min(7, dates.length); i++) {
-          if (logs[dates[i]]?.food) days7++;
-          if (latest === null && logs[dates[i]]?.weight) latest = logs[dates[i]].weightValue;
-        }
-        for (let i = 6; i < Math.min(14, dates.length); i++) {
-          if (logs[dates[i]]?.weight) { weekAgo = logs[dates[i]].weightValue; break; }
-        }
-        const acc = Object.values(accs).find(a => a.id === id);
-        return { id, username: acc?.username, profile, latest, days7, weekAgo };
-      }));
-      setClients(all.filter(Boolean));
+      try {
+        const sbKey = Object.keys(localStorage).find(k => k.startsWith("sb-") && k.endsWith("-auth-token"));
+        const token = sbKey ? JSON.parse(localStorage.getItem(sbKey))?.access_token : null;
+        const headers = { "apikey": SUPABASE_ANON_KEY };
+        if (token) headers["Authorization"] = "Bearer " + token;
+        const linksRes = await fetch(`${SUPABASE_URL}/rest/v1/pt_links?select=client_user_id&pt_user_id=eq.${session.id}&status=eq.active`, { headers });
+        const links = linksRes.ok ? await linksRes.json() : [];
+        const ids = links.map(l => l.client_user_id);
+        const all = await Promise.all(ids.map(async id => {
+          const profileRow = await supaGet(id, "profile");
+          if (!profileRow) return null;
+          const pr = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=data&user_id=eq.${id}&limit=1`, { headers });
+          const profArr = pr.ok ? await pr.json() : [];
+          const username = profArr[0]?.data?.username || "client";
+          const logs = (await supaGet(id, "logs")) || {};
+          const dates = Object.keys(logs).sort().reverse();
+          let latest = null, days7 = 0, weekAgo = null;
+          for (let i = 0; i < Math.min(7, dates.length); i++) {
+            if (logs[dates[i]]?.food) days7++;
+            if (latest === null && logs[dates[i]]?.weight) latest = logs[dates[i]].weightValue;
+          }
+          for (let i = 6; i < Math.min(14, dates.length); i++) {
+            if (logs[dates[i]]?.weight) { weekAgo = logs[dates[i]].weightValue; break; }
+          }
+          return { id, username, profile: profileRow, latest, days7, weekAgo };
+        }));
+        setClients(all.filter(Boolean));
+      } catch (e) {
+        console.error("PTList load failed", e);
+      }
       setLoading(false);
     })();
   }, [session.id]);
