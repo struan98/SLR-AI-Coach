@@ -1221,29 +1221,70 @@ function Auth({ themeCtx }) {
     }
   };
 
-    const trySignup = async () => {
+      const trySignup = async () => {
     setErr("");
     if (!email.includes("@")) { setErr("Enter a valid email"); return; }
     if (password.length < 6) { setErr("Password must be 6+ characters"); return; }
     if (password !== password2) { setErr("Passwords don't match"); return; }
     if (!username.trim() || username.length < 3) { setErr("Username must be 3+ characters"); return; }
     setLoading(true);
-    // Fire signUp without awaiting; chain the profile upsert when it returns.
-    supabase.auth.signUp({
-      email: email.trim(),
-      password,
-      options: { data: { username: username.toLowerCase(), role } },
-    }).then(({ data, error }) => {
-      if (error) { setErr(error.message); setLoading(false); return; }
-      if (data?.user) {
-        supabase.from("profiles").upsert({
-          user_id: data.user.id,
-          data: { username: username.toLowerCase(), role, createdAt: new Date().toISOString() },
-        }, { onConflict: "user_id" }).catch(e => console.error("profile upsert failed", e));
+    try {
+      // Step 1: create account via raw fetch
+      const r = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          data: { username: username.toLowerCase(), role },
+        }),
+      });
+      const data = await r.json();
+      console.log("[trySignup] status", r.status, "hasUser", !!data?.user);
+      if (!r.ok) {
+        setErr(data?.error_description || data?.msg || data?.error || "Signup failed");
+        setLoading(false);
+        return;
       }
-    }).catch(e => { setErr(e.message || String(e)); setLoading(false); });
-    // Safety: unstick the button after 8s even if Supabase never responds
-    setTimeout(() => setLoading(false), 8000);
+      // Step 2: store the session so the next page load picks it up
+      if (data.access_token) {
+        const projectRef = "vtvfnlvphdobrkcvkage";
+        const storageKey = `sb-${projectRef}-auth-token`;
+        localStorage.setItem(storageKey, JSON.stringify({
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
+          expires_in: data.expires_in,
+          expires_at: Math.floor(Date.now() / 1000) + (data.expires_in || 3600),
+          token_type: "bearer",
+          user: data.user,
+        }));
+      }
+      // Step 3: write the profile row directly via raw fetch (using the new token)
+      if (data.user?.id && data.access_token) {
+        await fetch(`${SUPABASE_URL}/rest/v1/profiles?on_conflict=user_id`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": SUPABASE_ANON_KEY,
+            "Authorization": "Bearer " + data.access_token,
+            "Prefer": "resolution=merge-duplicates",
+          },
+          body: JSON.stringify({
+            user_id: data.user.id,
+            data: { username: username.toLowerCase(), role, createdAt: new Date().toISOString() },
+          }),
+        }).catch(e => console.warn("profile upsert failed", e));
+      }
+      // Step 4: reload — boot flow will find the session and route into the app
+      window.location.href = window.location.pathname;
+    } catch (e) {
+      console.error("[trySignup] threw", e);
+      setErr(e.message || String(e));
+      setLoading(false);
+    }
   };
 
   return (
