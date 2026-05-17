@@ -1174,30 +1174,29 @@ function Auth({ themeCtx }) {
     setTimeout(() => setLoading(false), 6000);
   };
 
-  const trySignup = async () => {
+    const trySignup = async () => {
     setErr("");
     if (!email.includes("@")) { setErr("Enter a valid email"); return; }
     if (password.length < 6) { setErr("Password must be 6+ characters"); return; }
     if (password !== password2) { setErr("Passwords don't match"); return; }
     if (!username.trim() || username.length < 3) { setErr("Username must be 3+ characters"); return; }
     setLoading(true);
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: { data: { username: username.toLowerCase(), role } },
-      });
+    // Fire signUp without awaiting; chain the profile upsert when it returns.
+    supabase.auth.signUp({
+      email: email.trim(),
+      password,
+      options: { data: { username: username.toLowerCase(), role } },
+    }).then(({ data, error }) => {
       if (error) { setErr(error.message); setLoading(false); return; }
       if (data?.user) {
-        await supabase
-          .from("profiles")
-          .upsert({
-            user_id: data.user.id,
-            data: { username: username.toLowerCase(), role, createdAt: new Date().toISOString() },
-          }, { onConflict: "user_id" });
+        supabase.from("profiles").upsert({
+          user_id: data.user.id,
+          data: { username: username.toLowerCase(), role, createdAt: new Date().toISOString() },
+        }, { onConflict: "user_id" }).catch(e => console.error("profile upsert failed", e));
       }
-    } catch (e) { setErr(e.message || String(e)); }
-    setLoading(false);
+    }).catch(e => { setErr(e.message || String(e)); setLoading(false); });
+    // Safety: unstick the button after 8s even if Supabase never responds
+    setTimeout(() => setLoading(false), 8000);
   };
 
   return (
