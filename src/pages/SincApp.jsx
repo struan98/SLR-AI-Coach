@@ -7578,7 +7578,7 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
                     Reset all
                   </button>
                 )}
-                <button onClick={async () => {
+                                <button onClick={async () => {
                   // Strip empty values so we don't store {calTarget: null} junk
                   const clean = {};
                   if (overrideDraft.calTarget > 0) clean.calTarget = Number(overrideDraft.calTarget);
@@ -7589,6 +7589,18 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
                   if (Object.keys(clean).length === 0) delete next.targetOverrides;
                   await storage.set(userKey(session.id, "profile"), next);
                   setProfile(next);
+                  // Propagate the new targets to the active block so all read sites pick them up
+                  const newTargets = calculateTargets(next);
+                  const currentBlocks = (await storage.get(userKey(session.id, "blocks"))) || [];
+                  const updatedBlocks = currentBlocks.map(b => !b.endDate ? {
+                    ...b,
+                    calTarget: newTargets.calTarget,
+                    protein: newTargets.protein,
+                    fat: newTargets.fat,
+                    carbs: newTargets.carbs,
+                  } : b);
+                  await storage.set(userKey(session.id, "blocks"), updatedBlocks);
+                  setBlocks(updatedBlocks);
                   setOverrideEditing(false);
                 }} className="flex-1 h-10 text-white rounded-lg font-semibold text-xs" style={{ backgroundColor: ORANGE }}>Save</button>
               </div>
