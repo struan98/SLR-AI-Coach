@@ -1072,15 +1072,24 @@ export default function SINCApp() {
   const [profile, setProfile] = useState(null);
   const themeCtx = useTheme();
 
-  useEffect(() => {
+    useEffect(() => {
     let cancelled = false;
+    // Boot timeout: never get stuck on the loading screen
+    const bootTimeout = setTimeout(() => {
+      if (!cancelled) setBooting(false);
+    }, 5000);
     (async () => {
-      const { data: { session: supaSession } } = await supabase.auth.getSession();
-      if (cancelled) return;
-      if (supaSession?.user) {
-        await loadSession(supaSession);
+      try {
+        const { data: { session: supaSession } } = await supabase.auth.getSession();
+        if (cancelled) return;
+        if (supaSession?.user) {
+          await loadSession(supaSession);
+        }
+      } catch (e) {
+        console.error("getSession failed", e);
       }
-      setBooting(false);
+      clearTimeout(bootTimeout);
+      if (!cancelled) setBooting(false);
     })();
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, supaSession) => {
       if (cancelled) return;
@@ -1091,7 +1100,7 @@ export default function SINCApp() {
         setProfile(null);
       }
     });
-    return () => { cancelled = true; subscription.unsubscribe(); };
+    return () => { cancelled = true; clearTimeout(bootTimeout); subscription.unsubscribe(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
