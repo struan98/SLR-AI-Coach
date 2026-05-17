@@ -1163,14 +1163,18 @@ function Auth({ themeCtx }) {
   const [mode, setMode] = useState("login");
   const [role, setRole] = useState("user");
 
-  const tryLogin = async () => {
+    const tryLogin = async () => {
     setErr(""); setLoading(true);
+    // Timeout safety: if Supabase hangs, unstick the UI after 8 seconds
+    const timeout = setTimeout(() => setLoading(false), 8000);
     try {
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (error) setErr(error.message);
     } catch (e) { setErr(e.message || String(e)); }
+    clearTimeout(timeout);
     setLoading(false);
   };
+
 
   const trySignup = async () => {
     setErr("");
