@@ -125,7 +125,7 @@ const storage = {
     cache.set(key, v);
     return v;
   },
-  async set(key, value) {
+    async set(key, value) {
     cache.set(key, value);
     if (DEVICE_ONLY_KEYS.has(key)) {
       const ds = getDeviceStore();
@@ -135,11 +135,11 @@ const storage = {
     }
     const parsed = parseKey(key);
     if (parsed) {
-      supaSet(parsed.userId, parsed.subkey, value);
+      await supaSet(parsed.userId, parsed.subkey, value);
       return true;
     }
     if (currentAuthUserId) {
-      supaSet(currentAuthUserId, `global:${key}`, value);
+      await supaSet(currentAuthUserId, `global:${key}`, value);
       return true;
     }
     const ds = getDeviceStore();
@@ -147,7 +147,7 @@ const storage = {
     setDeviceStore(ds);
     return true;
   },
-  async delete(key) {
+    async delete(key) {
     cache.delete(key);
     if (DEVICE_ONLY_KEYS.has(key)) {
       const ds = getDeviceStore();
@@ -157,11 +157,11 @@ const storage = {
     }
     const parsed = parseKey(key);
     if (parsed) {
-      supaDelete(parsed.userId, parsed.subkey);
+      await supaDelete(parsed.userId, parsed.subkey);
       return true;
     }
     if (currentAuthUserId) {
-      supaDelete(currentAuthUserId, `global:${key}`);
+      await supaDelete(currentAuthUserId, `global:${key}`);
       return true;
     }
     const ds = getDeviceStore();
