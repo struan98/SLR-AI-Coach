@@ -44,31 +44,46 @@ function parseKey(key) {
   return null;
 }
 
+// Get current auth headers from the stored Supabase session.
+function authHeaders() {
+  const sbKey = Object.keys(localStorage).find(k => k.startsWith("sb-") && k.endsWith("-auth-token"));
+  let token = null;
+  if (sbKey) {
+    try { token = JSON.parse(localStorage.getItem(sbKey))?.access_token || null; } catch {}
+  }
+  const h = {
+    "Content-Type": "application/json",
+    "apikey": SUPABASE_ANON_KEY,
+  };
+  if (token) h["Authorization"] = "Bearer " + token;
+  return h;
+}
+
 async function supaGet(userId, subkey) {
   try {
-    const { data, error } = await supabase
-      .from("user_data")
-      .select("data")
-      .eq("user_id", userId)
-      .eq("key", subkey)
-      .maybeSingle();
-    if (error) { console.warn("supaGet error", subkey, error); return null; }
-    return data ? data.data : null;
+    const url = `${SUPABASE_URL}/rest/v1/user_data?select=data&user_id=eq.${encodeURIComponent(userId)}&key=eq.${encodeURIComponent(subkey)}&limit=1`;
+    const r = await fetch(url, { headers: authHeaders() });
+    if (!r.ok) { console.warn("supaGet status", r.status, subkey); return null; }
+    const arr = await r.json();
+    return Array.isArray(arr) && arr[0] ? arr[0].data : null;
   } catch (e) { console.warn("supaGet threw", e); return null; }
 }
 
 async function supaSet(userId, subkey, value) {
   try {
     console.log("[supaSet] writing", { userId, subkey, hasValue: !!value });
-    const { data, error } = await supabase
-      .from("user_data")
-      .upsert({ user_id: userId, key: subkey, data: value }, { onConflict: "user_id,key" })
-      .select();
-    if (error) {
-      console.error("[supaSet] ERROR", subkey, error.message, error);
+    const url = `${SUPABASE_URL}/rest/v1/user_data?on_conflict=user_id,key`;
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { ...authHeaders(), "Prefer": "resolution=merge-duplicates,return=representation" },
+      body: JSON.stringify({ user_id: userId, key: subkey, data: value }),
+    });
+    if (!r.ok) {
+      const txt = await r.text();
+      console.error("[supaSet] ERROR", subkey, r.status, txt);
       return false;
     }
-    console.log("[supaSet] wrote OK", subkey, data);
+    console.log("[supaSet] wrote OK", subkey);
     return true;
   } catch (e) {
     console.error("[supaSet] threw", subkey, e);
@@ -78,25 +93,19 @@ async function supaSet(userId, subkey, value) {
 
 async function supaDelete(userId, subkey) {
   try {
-    const { error } = await supabase
-      .from("user_data")
-      .delete()
-      .eq("user_id", userId)
-      .eq("key", subkey);
-    if (error) { console.warn("supaDelete error", subkey, error); return false; }
-    return true;
+    const url = `${SUPABASE_URL}/rest/v1/user_data?user_id=eq.${encodeURIComponent(userId)}&key=eq.${encodeURIComponent(subkey)}`;
+    const r = await fetch(url, { method: "DELETE", headers: authHeaders() });
+    return r.ok;
   } catch (e) { console.warn("supaDelete threw", e); return false; }
 }
 
 async function supaListSubkeys(userId, prefix) {
   try {
-    const { data, error } = await supabase
-      .from("user_data")
-      .select("key")
-      .eq("user_id", userId)
-      .like("key", `${prefix}%`);
-    if (error) { console.warn("supaListSubkeys error", error); return []; }
-    return data ? data.map(r => r.key) : [];
+    const url = `${SUPABASE_URL}/rest/v1/user_data?select=key&user_id=eq.${encodeURIComponent(userId)}&key=like.${encodeURIComponent(prefix + "%")}`;
+    const r = await fetch(url, { headers: authHeaders() });
+    if (!r.ok) return [];
+    const arr = await r.json();
+    return Array.isArray(arr) ? arr.map(row => row.key) : [];
   } catch (e) { console.warn("supaListSubkeys threw", e); return []; }
 }
 
