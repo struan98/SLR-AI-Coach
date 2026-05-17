@@ -7362,28 +7362,45 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
     setExercisePrefs(next);
   };
 
-    useEffect(() => {
+      useEffect(() => {
     (async () => {
       try {
+        // Step 1: read linked client IDs from pt_links
         const sbKey = Object.keys(localStorage).find(k => k.startsWith("sb-") && k.endsWith("-auth-token"));
         const token = sbKey ? JSON.parse(localStorage.getItem(sbKey))?.access_token : null;
         const headers = { "apikey": SUPABASE_ANON_KEY };
         if (token) headers["Authorization"] = "Bearer " + token;
-        // Find an active link where I'm the client
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/pt_links?select=pt_user_id&client_user_id=eq.${session.id}&status=eq.active&limit=1`, { headers });
-        if (!r.ok) return;
-        const rows = await r.json();
-        if (!rows[0]) return;
-        const ptId = rows[0].pt_user_id;
-        // Fetch the PT's profile to display their name
-        const pr = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=user_id,data&user_id=eq.${ptId}&limit=1`, { headers });
-        if (!pr.ok) return;
-        const profiles = await pr.json();
-        if (profiles[0]) setLinkedPT({ id: profiles[0].user_id, username: profiles[0].data?.username || "PT" });
-      } catch (e) { console.warn("load PT link failed", e); }
+        const linksRes = await fetch(`${SUPABASE_URL}/rest/v1/pt_links?select=client_user_id&pt_user_id=eq.${session.id}&status=eq.active`, { headers });
+        const links = linksRes.ok ? await linksRes.json() : [];
+        const ids = links.map(l => l.client_user_id);
+        // Step 2: for each client, fetch profile + recent logs via raw fetch (RLS lets PT read these via is_pt_of)
+        const all = await Promise.all(ids.map(async id => {
+          // Fetch client's profile row (in our schema profiles is the auth-trigger row; the editable profile is in user_data with key='profile')
+          const profileRow = await supaGet(id, "profile");
+          if (!profileRow) return null;
+          // Fetch username from profiles table
+          const pr = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=data&user_id=eq.${id}&limit=1`, { headers });
+          const profArr = pr.ok ? await pr.json() : [];
+          const username = profArr[0]?.data?.username || "client";
+          const logs = (await supaGet(id, "logs")) || {};
+          const dates = Object.keys(logs).sort().reverse();
+          let latest = null, days7 = 0, weekAgo = null;
+          for (let i = 0; i < Math.min(7, dates.length); i++) {
+            if (logs[dates[i]]?.food) days7++;
+            if (latest === null && logs[dates[i]]?.weight) latest = logs[dates[i]].weightValue;
+          }
+          for (let i = 6; i < Math.min(14, dates.length); i++) {
+            if (logs[dates[i]]?.weight) { weekAgo = logs[dates[i]].weightValue; break; }
+          }
+          return { id, username, profile: profileRow, latest, days7, weekAgo };
+        }));
+        setClients(all.filter(Boolean));
+      } catch (e) {
+        console.error("PTList load failed", e);
+      }
+      setLoading(false);
     })();
   }, [session.id]);
-
 
   const openEdit = () => {
     setEditForm({ ...profile });
