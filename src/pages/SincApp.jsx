@@ -7187,11 +7187,11 @@ function FoodHistoryView({ logs, targets, theme }) {
       {/* Day-by-day list */}
       <div className={`${theme.card} rounded-2xl border ${theme.border} p-3`}>
         <div className={`text-[10px] font-bold uppercase tracking-wide ${theme.textMuted} mb-2 px-1`}>Last {last30.length} days</div>
-        <div className="space-y-1">
+               <div className="space-y-1">
           {last30.map(d => {
-            const log = logs[d];
+            const log = logs[d] || {};
             const target = targets.calTarget;
-            const overUnder = log.kcalEaten - target;
+            const overUnder = (log.kcalEaten || 0) - target;
             const within = Math.abs(overUnder) < 200;
             return (
               <div key={d} className={`flex items-center gap-3 py-2 px-2 border-b ${theme.border} last:border-0`}>
