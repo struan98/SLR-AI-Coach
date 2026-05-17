@@ -7764,11 +7764,11 @@ function Settings({ session, profile, setProfile, themeCtx, onLogout }) {
         <button onClick={onLogout} className={`w-full h-12 ${theme.surface} ${theme.surfaceText} rounded-xl font-semibold`}>Log out</button>
       </div>
 
-      {showPTModal && (
+            {showPTModal && (
         <Modal title="Link a PT" onClose={() => setShowPTModal(false)} theme={theme}>
-          <p className={`text-sm ${theme.textMuted} mb-3`}>Enter your PT's username. They'll see your progress and can adjust your training.</p>
-          <p className={`text-xs ${theme.textMuted} mb-3`}>Try <span className="font-mono font-bold" style={{ color: ORANGE }}>coach_dave</span> for the demo.</p>
-          <TextInput label="PT username" value={ptUsername} setValue={setPtUsername} theme={theme} placeholder="e.g. coach_dave" />
+          <p className={`text-sm ${theme.textMuted} mb-3`}>Paste your PT's user ID below. They can find theirs in Settings → Your user ID.</p>
+          <p className={`text-xs ${theme.textMuted} mb-3`}>The ID looks like <span className="font-mono">xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</span>.</p>
+          <TextInput label="PT user ID" value={ptUsername} setValue={setPtUsername} theme={theme} placeholder="paste UUID" />
           {ptError && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 mb-3">{ptError}</div>}
           <button onClick={linkPT} className="w-full h-12 text-white rounded-xl font-semibold" style={{ backgroundColor: ORANGE }}>Link PT</button>
         </Modal>
