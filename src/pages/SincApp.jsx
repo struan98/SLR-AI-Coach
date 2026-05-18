@@ -2141,8 +2141,20 @@ function Home({ session, profile, themeCtx }) {
       setLogs(allLogs);
       const allBlocks = await ensureCurrentBlock(session.id, profile);
       setBlocks(allBlocks);
-      const ptId = await storage.get(`link:${session.id}`);
-      if (ptId) { const accs = await getAllAccounts(); const pt = Object.values(accs).find(a => a.id === ptId); if (pt) setLinkedPT(pt); }
+            try {
+        const sbKey = Object.keys(localStorage).find(k => k.startsWith("sb-") && k.endsWith("-auth-token"));
+        const token = sbKey ? JSON.parse(localStorage.getItem(sbKey))?.access_token : null;
+        const headers = { "apikey": SUPABASE_ANON_KEY };
+        if (token) headers["Authorization"] = "Bearer " + token;
+        const linkRes = await fetch(`${SUPABASE_URL}/rest/v1/pt_links?select=pt_user_id&client_user_id=eq.${session.id}&status=eq.active&limit=1`, { headers });
+        const links = linkRes.ok ? await linkRes.json() : [];
+        if (links[0]) {
+          const ptId = links[0].pt_user_id;
+          const pr = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=user_id,data&user_id=eq.${ptId}&limit=1`, { headers });
+          const profs = pr.ok ? await pr.json() : [];
+          if (profs[0]) setLinkedPT({ id: profs[0].user_id, username: profs[0].data?.username || "PT" });
+        }
+      } catch (e) { console.warn("load PT link failed", e); }
 
       // Calculate streak — consecutive days ending today with food logged
       let count = 0;
