@@ -4350,7 +4350,7 @@ function WeekView({ profile, session, themeCtx, onOpenDay, onViewHistory }) {
           <p className="text-blue-100 text-sm mt-1">{profile.split || "No plan"} · {profile.daysPerWeek || 4} days · ~{profile.sessionLength || 60} min</p>
         </div>
       </div>
-      <div className="px-4 -mt-3 space-y-3 pb-24">
+            <div className="px-4 pt-4 space-y-3 pb-24">
 
         {/* Week header + edit toggle */}
         <div className="flex items-center justify-between px-1">
