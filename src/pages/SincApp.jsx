@@ -4160,12 +4160,12 @@ function Sparkline({ data, target }) {
 }
 
 // ============================================================
-// TRAINING — SESSION LOGGING (Phase 2.5 MVP)
+// TRAINING — SESSION LOGGING v2 (Weekly plan + session list)
 // ============================================================
-// Minimal viable session logger. Preserves TrainingPreview for history view.
-// Full feature set (RPE, swaps, plate calc, rotation, calibration) deferred.
+// Full weekly schedule editor + tap-any-exercise session view.
+// Preserves TrainingPreview for history view.
 
-// ---- EXERCISE LIBRARY (minimal, for plan generation) ----
+// ---- EXERCISE LIBRARY (minimal) ----
 const TR_EXERCISES = {
   push: [
     { name: "Barbell Bench Press", muscle: "Chest", sets: 3, reps: "6-8" },
@@ -4215,8 +4215,9 @@ const TR_EXERCISES = {
   ],
 };
 
-// ---- SESSION SCHEDULE ----
-// Returns array of session names for the week based on split + days/week
+const TR_SESSION_TYPES = ["push", "pull", "legs", "upper", "lower", "full", "rest"];
+
+// ---- SESSION SCHEDULE (auto-generated) ----
 function getWeekSchedule(split, days) {
   const d = parseInt(days) || 4;
   const s = (split || "").toLowerCase();
@@ -4231,70 +4232,42 @@ function getWeekSchedule(split, days) {
     if (d === 4) return ["upper", "lower", "upper", "lower"];
     return ["upper", "lower", "upper"];
   }
-  // Full body default
   return Array(d).fill("full");
 }
 
-// ---- TRAINING ROUTER — replaces TrainingPreview usage on Train tab ----
-function TrainTab({ profile, themeCtx, session }) {
-  const [view, setView] = useState("today"); // today | history | session | logger
-  const [activeSession, setActiveSession] = useState(null); // {sessionType, dayIndex, date}
-  const [loggerState, setLoggerState] = useState(null); // {exercises, currentIdx, sets}
+// Get the planned session type for a given date (with overrides applied)
+function getPlannedSession(date, split, days, overrides) {
+  if (overrides && overrides[date]) return overrides[date];
+  const schedule = getWeekSchedule(split, days);
+  const restDays = Math.max(0, 7 - schedule.length);
+  // Pattern: sessions then rest, spread across week
+  // Simple: use day-of-year mod 7 to pick position in extended week [...schedule, "rest"*restDays]
+  const fullWeek = [...schedule, ...Array(restDays).fill("rest")];
+  const start = new Date(new Date().getFullYear(), 0, 0);
+  const diff = new Date(date).getTime() - start.getTime();
+  const dayOfYear = Math.floor(diff / 86400000);
+  return fullWeek[dayOfYear % 7];
+}
 
+// ---- TRAINING ROUTER ----
+function TrainTab({ profile, themeCtx, session }) {
+  const [view, setView] = useState("week"); // week | history | session
+  const [selectedDate, setSelectedDate] = useState(null);
   const { theme } = themeCtx;
 
-  const startSession = (sessionType, date) => {
-    const exercises = TR_EXERCISES[sessionType] || TR_EXERCISES.full;
-    setActiveSession({ sessionType, date });
-    setLoggerState({
-      exercises: exercises.map(e => ({ ...e, loggedSets: [] })),
-      currentIdx: 0,
-    });
-    setView("logger");
+  const openDay = (date) => {
+    setSelectedDate(date);
+    setView("session");
   };
 
-  const finishSession = async () => {
-    // Save to lifts + session-completions (same shape TrainingPreview reads)
-    const date = activeSession.date;
-    const lifts = (await storage.get(userKey(session.id, "lifts"))) || {};
-    loggerState.exercises.forEach(ex => {
-      if (ex.loggedSets.length === 0) return;
-      if (!lifts[ex.name]) lifts[ex.name] = { history: [] };
-      // Remove any existing entry for this date so re-logging replaces it
-      lifts[ex.name].history = (lifts[ex.name].history || []).filter(s => s.date !== date);
-      lifts[ex.name].history.push({ date, sets: ex.loggedSets });
-    });
-    await storage.set(userKey(session.id, "lifts"), lifts);
-    // Mark day as worked out
-    const completions = (await storage.get(userKey(session.id, "session-completions"))) || {};
-    completions[date] = { sessionType: activeSession.sessionType, completedAt: new Date().toISOString() };
-    await storage.set(userKey(session.id, "session-completions"), completions);
-    // Also update logs.workout flag for the day (Home streak logic reads this)
-    const logs = (await storage.get(userKey(session.id, "logs"))) || {};
-    logs[date] = { ...(logs[date] || {}), workout: true };
-    await storage.set(userKey(session.id, "logs"), logs);
-    // Reset and go to today
-    setActiveSession(null);
-    setLoggerState(null);
-    setView("today");
-  };
-
-  const cancelSession = () => {
-    if (!confirm("Discard this session? Logged sets will be lost.")) return;
-    setActiveSession(null);
-    setLoggerState(null);
-    setView("today");
-  };
-
-  if (view === "logger" && loggerState) {
+  if (view === "session" && selectedDate) {
     return (
-      <SessionLogger
-        state={loggerState}
-        setState={setLoggerState}
-        onFinish={finishSession}
-        onCancel={cancelSession}
+      <SessionDayView
+        date={selectedDate}
+        profile={profile}
+        session={session}
         themeCtx={themeCtx}
-        sessionType={activeSession.sessionType}
+        onBack={() => { setSelectedDate(null); setView("week"); }}
       />
     );
   }
@@ -4302,7 +4275,7 @@ function TrainTab({ profile, themeCtx, session }) {
     return (
       <div>
         <div className="px-5 pt-6 pb-3 flex items-center justify-between">
-          <button onClick={() => setView("today")} className={`text-sm ${theme.textMuted}`}>← Back</button>
+          <button onClick={() => setView("week")} className={`text-sm ${theme.textMuted}`}>← Back</button>
           <div className={`text-sm font-bold ${theme.text}`}>History</div>
           <div className="w-12" />
         </div>
@@ -4311,57 +4284,62 @@ function TrainTab({ profile, themeCtx, session }) {
     );
   }
   return (
-    <TodaySessionView
+    <WeekView
       profile={profile}
       session={session}
       themeCtx={themeCtx}
-      onStart={startSession}
+      onOpenDay={openDay}
       onViewHistory={() => setView("history")}
     />
   );
 }
 
-// ---- TODAY VIEW: shows today's planned session + upcoming ----
-function TodaySessionView({ profile, session, themeCtx, onStart, onViewHistory }) {
+// ---- WEEK VIEW: 7-day plan, editable ----
+function WeekView({ profile, session, themeCtx, onOpenDay, onViewHistory }) {
   const { theme } = themeCtx;
+  const [overrides, setOverrides] = useState({});
   const [completions, setCompletions] = useState({});
-  const today = new Date().toISOString().split("T")[0];
+  const [editing, setEditing] = useState(false);
+  const [editingDay, setEditingDay] = useState(null); // date being changed
 
   useEffect(() => {
     (async () => {
+      setOverrides((await storage.get(userKey(session.id, "session-plan-overrides"))) || {});
       setCompletions((await storage.get(userKey(session.id, "session-completions"))) || {});
     })();
   }, [session.id]);
 
-  const schedule = useMemo(
-    () => getWeekSchedule(profile.split, profile.daysPerWeek),
-    [profile.split, profile.daysPerWeek]
-  );
-
-  // Figure out today's session: which slot are we on in the rotation?
-  // Simple approach: cycle through the schedule based on day of year mod length.
-  const dayIdx = useMemo(() => {
-    const start = new Date(new Date().getFullYear(), 0, 0);
-    const diff = Date.now() - start.getTime();
-    return Math.floor(diff / 86400000) % schedule.length;
-  }, [schedule.length]);
-  const todaysSession = schedule[dayIdx];
-  const doneToday = !!completions[today];
-
-  // Upcoming 6 days
-  const upcoming = useMemo(() => {
+  const days = useMemo(() => {
     const out = [];
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 0; i < 7; i++) {
       const d = new Date();
       d.setDate(d.getDate() + i);
       const ds = d.toISOString().split("T")[0];
-      const idx = (dayIdx + i) % schedule.length;
-      out.push({ date: ds, sessionType: schedule[idx], done: !!completions[ds] });
+      out.push({
+        date: ds,
+        label: d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }),
+        isToday: i === 0,
+      });
     }
     return out;
-  }, [dayIdx, schedule, completions]);
+  }, []);
 
-  const labelFor = (t) => t ? t.charAt(0).toUpperCase() + t.slice(1) : "Rest";
+  const setSessionForDay = async (date, sessionType) => {
+    const next = { ...overrides, [date]: sessionType };
+    setOverrides(next);
+    await storage.set(userKey(session.id, "session-plan-overrides"), next);
+    setEditingDay(null);
+  };
+
+  const clearOverride = async (date) => {
+    const next = { ...overrides };
+    delete next[date];
+    setOverrides(next);
+    await storage.set(userKey(session.id, "session-plan-overrides"), next);
+    setEditingDay(null);
+  };
+
+  const labelFor = (t) => t === "rest" ? "Rest" : t ? t.charAt(0).toUpperCase() + t.slice(1) : "—";
 
   return (
     <div>
@@ -4373,34 +4351,75 @@ function TodaySessionView({ profile, session, themeCtx, onStart, onViewHistory }
         </div>
       </div>
       <div className="px-4 -mt-3 space-y-3 pb-24">
-        {/* Today's session card */}
-        <div className={`${theme.card} rounded-xl border ${theme.border} p-4`}>
-          <div className={`text-[10px] font-bold uppercase tracking-wide ${theme.textMuted} mb-2`}>Today · {new Date().toLocaleDateString(undefined, { weekday: "long" })}</div>
-          <div className={`text-2xl font-bold ${theme.text} mb-1`}>{labelFor(todaysSession)}</div>
-          <div className={`text-sm ${theme.textMuted} mb-4`}>{(TR_EXERCISES[todaysSession] || []).length} exercises</div>
-          {doneToday ? (
-            <div className="text-sm font-semibold px-3 py-2 rounded-lg text-center" style={{ background: "#10b98120", color: "#10b981" }}>✓ Completed today</div>
-          ) : (
-            <button onClick={() => onStart(todaysSession, today)} className="w-full h-12 text-white rounded-lg font-bold" style={{ backgroundColor: ORANGE }}>
-              Start session
-            </button>
-          )}
+
+        {/* Week header + edit toggle */}
+        <div className="flex items-center justify-between px-1">
+          <div className={`text-xs font-bold uppercase tracking-wide ${theme.textMuted}`}>Next 7 days</div>
+          <button onClick={() => { setEditing(!editing); setEditingDay(null); }} className="text-xs font-semibold" style={{ color: ORANGE }}>
+            {editing ? "Done" : "Edit plan"}
+          </button>
         </div>
 
-        {/* Upcoming week */}
-        <div className={`${theme.card} rounded-xl border ${theme.border} p-4`}>
-          <div className={`text-[10px] font-bold uppercase tracking-wide ${theme.textMuted} mb-3`}>Coming up</div>
-          <div className="space-y-2">
-            {upcoming.map(u => (
-              <div key={u.date} className="flex items-center justify-between py-1.5">
-                <div>
-                  <div className={`text-sm font-semibold ${theme.text}`}>{new Date(u.date).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}</div>
-                  <div className={`text-xs ${theme.textMuted}`}>{labelFor(u.sessionType)}</div>
+        {/* Day cards */}
+        <div className="space-y-2">
+          {days.map(d => {
+            const planned = getPlannedSession(d.date, profile.split, profile.daysPerWeek, overrides);
+            const done = !!completions[d.date];
+            const overridden = !!overrides[d.date];
+            const isEditingThisDay = editingDay === d.date;
+            const isRest = planned === "rest";
+
+            return (
+              <div key={d.date} className={`${theme.card} rounded-xl border ${theme.border} ${d.isToday ? "ring-2" : ""}`} style={d.isToday ? { boxShadow: `0 0 0 2px ${ORANGE}` } : {}}>
+                <div className="p-4">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className={`text-[10px] font-bold uppercase tracking-wide ${theme.textMuted}`}>
+                        {d.isToday ? "Today" : d.label}
+                        {overridden && <span className="ml-2" style={{ color: ORANGE }}>· changed</span>}
+                      </div>
+                      <div className={`text-lg font-bold ${theme.text} mt-0.5`}>{labelFor(planned)}</div>
+                      {!isRest && <div className={`text-xs ${theme.textMuted}`}>{(TR_EXERCISES[planned] || []).length} exercises</div>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {done && <span className="text-xs font-bold" style={{ color: "#10b981" }}>✓</span>}
+                      {editing && (
+                        <button onClick={() => setEditingDay(isEditingThisDay ? null : d.date)} className="text-xs font-semibold px-2 py-1 rounded" style={{ backgroundColor: `${ORANGE}20`, color: ORANGE }}>
+                          {isEditingThisDay ? "Cancel" : "Change"}
+                        </button>
+                      )}
+                      {!editing && !isRest && (
+                        <button onClick={() => onOpenDay(d.date)} className="text-xs font-semibold text-white px-3 py-1.5 rounded" style={{ backgroundColor: ORANGE }}>
+                          {done ? "View" : "Open"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Type picker (only when editing this day) */}
+                  {isEditingThisDay && (
+                    <div className="mt-3 pt-3 border-t border-slate-200/20">
+                      <div className={`text-[10px] font-bold uppercase tracking-wide ${theme.textMuted} mb-2`}>Change to</div>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {TR_SESSION_TYPES.map(t => (
+                          <button key={t} onClick={() => setSessionForDay(d.date, t)}
+                            className={`h-9 rounded text-xs font-semibold ${planned === t ? "text-white" : `${theme.surface} ${theme.surfaceText}`}`}
+                            style={planned === t ? { backgroundColor: ORANGE } : {}}>
+                            {labelFor(t)}
+                          </button>
+                        ))}
+                      </div>
+                      {overridden && (
+                        <button onClick={() => clearOverride(d.date)} className={`w-full mt-2 h-8 rounded text-xs font-semibold ${theme.textMuted}`}>
+                          Reset to default
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
-                {u.done && <span className="text-xs font-bold" style={{ color: "#10b981" }}>✓</span>}
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
 
         {/* History link */}
@@ -4412,131 +4431,251 @@ function TodaySessionView({ profile, session, themeCtx, onStart, onViewHistory }
   );
 }
 
-// ---- SESSION LOGGER: one exercise at a time ----
-function SessionLogger({ state, setState, onFinish, onCancel, themeCtx, sessionType }) {
+// ---- SESSION DAY VIEW: exercise list, tap to log ----
+function SessionDayView({ date, profile, session, themeCtx, onBack }) {
   const { theme } = themeCtx;
-  const [weightDraft, setWeightDraft] = useState("");
-  const [repsDraft, setRepsDraft] = useState("");
+  const [overrides, setOverrides] = useState({});
+  const [priorLifts, setPriorLifts] = useState({});
+  const [logs, setLogs] = useState({}); // { exerciseName: [{weight, reps}, ...] }
+  const [openExercise, setOpenExercise] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  const ex = state.exercises[state.currentIdx];
-  const total = state.exercises.length;
+  useEffect(() => {
+    (async () => {
+      const ov = (await storage.get(userKey(session.id, "session-plan-overrides"))) || {};
+      const lifts = (await storage.get(userKey(session.id, "lifts"))) || {};
+      setOverrides(ov);
+      setPriorLifts(lifts);
+      // Load existing logs for this date so re-entry shows prior sets
+      const existing = {};
+      Object.entries(lifts).forEach(([exName, exData]) => {
+        const dayEntry = (exData.history || []).find(h => h.date === date);
+        if (dayEntry) existing[exName] = dayEntry.sets;
+      });
+      setLogs(existing);
+      setLoading(false);
+    })();
+  }, [session.id, date]);
 
-  const logSet = () => {
-    const weight = parseFloat(weightDraft);
-    const reps = parseInt(repsDraft);
-    if (!weight || !reps) return;
-    const next = { ...state };
-    next.exercises = [...state.exercises];
-    next.exercises[state.currentIdx] = {
-      ...ex,
-      loggedSets: [...(ex.loggedSets || []), { weight, reps }],
-    };
-    setState(next);
-    setWeightDraft("");
-    setRepsDraft("");
+  const sessionType = getPlannedSession(date, profile.split, profile.daysPerWeek, overrides);
+  const exercises = TR_EXERCISES[sessionType] || [];
+  const isRest = sessionType === "rest";
+  const dateLabel = new Date(date).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
+
+  // Get the most recent PRIOR log for an exercise (before this date)
+  const getPrior = (exName) => {
+    const h = priorLifts[exName]?.history || [];
+    const prior = h.filter(e => e.date < date).sort((a, b) => b.date.localeCompare(a.date))[0];
+    return prior ? prior.sets : [];
   };
 
-  const removeSet = (idx) => {
-    const next = { ...state };
-    next.exercises = [...state.exercises];
-    next.exercises[state.currentIdx] = {
-      ...ex,
-      loggedSets: ex.loggedSets.filter((_, i) => i !== idx),
-    };
-    setState(next);
-  };
-
-  const nextExercise = () => {
-    if (state.currentIdx < total - 1) {
-      setState({ ...state, currentIdx: state.currentIdx + 1 });
-      setWeightDraft("");
-      setRepsDraft("");
+  const setLogsForExercise = async (exName, sets) => {
+    const nextLogs = { ...logs, [exName]: sets };
+    setLogs(nextLogs);
+    // Persist to lifts
+    const lifts = { ...priorLifts };
+    if (!lifts[exName]) lifts[exName] = { history: [] };
+    lifts[exName].history = (lifts[exName].history || []).filter(h => h.date !== date);
+    if (sets.length > 0) {
+      lifts[exName].history.push({ date, sets });
     }
-  };
-  const prevExercise = () => {
-    if (state.currentIdx > 0) {
-      setState({ ...state, currentIdx: state.currentIdx - 1 });
-      setWeightDraft("");
-      setRepsDraft("");
+    setPriorLifts(lifts);
+    await storage.set(userKey(session.id, "lifts"), lifts);
+    // If ANY exercise has logged sets, mark day as completed
+    const anyLogged = Object.values(nextLogs).some(s => s && s.length > 0);
+    const completions = (await storage.get(userKey(session.id, "session-completions"))) || {};
+    if (anyLogged) {
+      completions[date] = { sessionType, completedAt: new Date().toISOString() };
+    } else {
+      delete completions[date];
     }
+    await storage.set(userKey(session.id, "session-completions"), completions);
+    // Update logs.workout flag
+    const dailyLogs = (await storage.get(userKey(session.id, "logs"))) || {};
+    dailyLogs[date] = { ...(dailyLogs[date] || {}), workout: anyLogged };
+    await storage.set(userKey(session.id, "logs"), dailyLogs);
   };
 
-  const totalLogged = state.exercises.reduce((s, e) => s + (e.loggedSets?.length || 0), 0);
+  if (loading) {
+    return <div className={`min-h-screen ${theme.bg} flex items-center justify-center`}><div className={theme.textMuted}>Loading...</div></div>;
+  }
+
+  if (openExercise) {
+    return (
+      <ExerciseLogger
+        exercise={openExercise}
+        priorSets={getPrior(openExercise.name)}
+        currentSets={logs[openExercise.name] || []}
+        onSave={async (sets) => {
+          await setLogsForExercise(openExercise.name, sets);
+          setOpenExercise(null);
+        }}
+        onCancel={() => setOpenExercise(null)}
+        themeCtx={themeCtx}
+      />
+    );
+  }
 
   return (
     <div className={`min-h-screen ${theme.bg} pb-24`}>
-      <div className="px-5 pt-10 pb-4 text-white" style={{ background: `linear-gradient(135deg, ${theme.headerStart}, ${theme.headerEnd})` }}>
-        <div className="flex items-center justify-between mb-2">
-          <button onClick={onCancel} className="text-sm text-blue-100">Cancel</button>
-          <div className="text-xs font-bold uppercase tracking-wide text-blue-100">{sessionType} · {state.currentIdx + 1}/{total}</div>
-          <div className="text-xs text-blue-100">{totalLogged} sets</div>
+      <div className="px-5 pt-10 pb-6 text-white" style={{ background: `linear-gradient(135deg, ${theme.headerStart}, ${theme.headerEnd})` }}>
+        <div className="flex items-center justify-between mb-3">
+          <button onClick={onBack} className="text-sm text-blue-100">← Back</button>
+          <div className="text-xs font-bold uppercase tracking-wide text-blue-100">{dateLabel}</div>
+          <div className="w-12" />
         </div>
-        <h1 className="text-xl font-bold">{ex.name}</h1>
-        <p className="text-sm text-blue-100 mt-1">{ex.muscle} · target {ex.sets}×{ex.reps}</p>
+        <h1 className="text-2xl font-bold capitalize">{sessionType}</h1>
+        {!isRest && <p className="text-sm text-blue-100 mt-1">{exercises.length} exercises</p>}
       </div>
 
-      <div className="px-4 pt-4 space-y-3">
-        {/* Logged sets so far */}
-        <div className={`${theme.card} rounded-xl border ${theme.border} p-4`}>
-          <div className={`text-[10px] font-bold uppercase tracking-wide ${theme.textMuted} mb-2`}>Sets logged</div>
-          {(ex.loggedSets || []).length === 0 ? (
-            <div className={`text-sm ${theme.textMuted}`}>None yet</div>
-          ) : (
-            <div className="space-y-1.5">
-              {ex.loggedSets.map((s, i) => (
-                <div key={i} className={`flex items-center justify-between px-3 py-2 rounded ${theme.surface}`}>
-                  <span className={`text-sm font-semibold ${theme.text}`}>Set {i + 1}: {s.weight}kg × {s.reps}</span>
-                  <button onClick={() => removeSet(i)} className="text-xs text-red-500 font-semibold">Remove</button>
+      {isRest ? (
+        <div className="px-4 pt-6">
+          <div className={`${theme.card} rounded-xl border ${theme.border} p-6 text-center`}>
+            <div className={`text-lg font-bold ${theme.text} mb-1`}>Rest day</div>
+            <div className={`text-sm ${theme.textMuted}`}>No session planned. Tap "Edit plan" on the previous screen to add one.</div>
+          </div>
+        </div>
+      ) : (
+        <div className="px-4 pt-4 space-y-2">
+          {exercises.map((ex, i) => {
+            const logged = logs[ex.name] || [];
+            const prior = getPrior(ex.name);
+            const hasLogged = logged.length > 0;
+            return (
+              <button key={i} onClick={() => setOpenExercise(ex)}
+                className={`w-full ${theme.card} rounded-xl border ${theme.border} p-4 text-left`}>
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className={`text-base font-bold ${theme.text}`}>{ex.name}</div>
+                    <div className={`text-xs ${theme.textMuted} mt-0.5`}>{ex.muscle} · target {ex.sets}×{ex.reps}</div>
+                  </div>
+                  <div className="text-right ml-2">
+                    {hasLogged ? (
+                      <div className="text-xs font-bold" style={{ color: "#10b981" }}>
+                        {logged.length}/{ex.sets} ✓
+                      </div>
+                    ) : (
+                      <div className={`text-xs ${theme.textMuted}`}>0/{ex.sets}</div>
+                    )}
+                  </div>
                 </div>
-              ))}
-            </div>
-          )}
+                {(hasLogged || prior.length > 0) && (
+                  <div className="mt-2 pt-2 border-t border-slate-200/20">
+                    {hasLogged ? (
+                      <div className={`text-xs ${theme.text}`}>
+                        Today: {logged.map(s => `${s.weight}kg×${s.reps}`).join(" · ")}
+                      </div>
+                    ) : (
+                      <div className={`text-xs ${theme.textMuted}`}>
+                        Last time: {prior.map(s => `${s.weight}kg×${s.reps}`).join(" · ")}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- EXERCISE LOGGER: single exercise, edit sets ----
+function ExerciseLogger({ exercise, priorSets, currentSets, onSave, onCancel, themeCtx }) {
+  const { theme } = themeCtx;
+  // Start with currentSets if any, else defaults from priorSets (shown greyed out)
+  const [sets, setSets] = useState(() => {
+    if (currentSets && currentSets.length > 0) return currentSets.map(s => ({ ...s, dirty: true }));
+    if (priorSets && priorSets.length > 0) return priorSets.map(s => ({ ...s, dirty: false }));
+    return [];
+  });
+
+  const targetSets = exercise.sets || 3;
+
+  const updateSet = (idx, field, value) => {
+    const v = field === "reps" ? parseInt(value) || 0 : parseFloat(value) || 0;
+    const next = [...sets];
+    next[idx] = { ...next[idx], [field]: v, dirty: true };
+    setSets(next);
+  };
+
+  const addSet = () => {
+    const last = sets[sets.length - 1];
+    setSets([...sets, { weight: last?.weight || 0, reps: last?.reps || 0, dirty: true }]);
+  };
+
+  const removeSet = (idx) => {
+    setSets(sets.filter((_, i) => i !== idx));
+  };
+
+  const handleSave = () => {
+    // Only save sets that user has confirmed (dirty) OR that came from currentSets
+    const toSave = sets.filter(s => s.dirty && s.weight > 0 && s.reps > 0).map(({ weight, reps }) => ({ weight, reps }));
+    onSave(toSave);
+  };
+
+  // Ensure at least `targetSets` rows shown (fill with prior defaults if available)
+  useEffect(() => {
+    if (sets.length < targetSets) {
+      const missing = targetSets - sets.length;
+      const template = sets[sets.length - 1] || priorSets[0] || { weight: 0, reps: 0 };
+      const filled = [...sets];
+      for (let i = 0; i < missing; i++) {
+        filled.push({ weight: template.weight, reps: template.reps, dirty: false });
+      }
+      setSets(filled);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className={`min-h-screen ${theme.bg} pb-24`}>
+      <div className="px-5 pt-10 pb-5 text-white" style={{ background: `linear-gradient(135deg, ${theme.headerStart}, ${theme.headerEnd})` }}>
+        <div className="flex items-center justify-between mb-2">
+          <button onClick={onCancel} className="text-sm text-blue-100">← Back</button>
+          <div className="w-12" />
+        </div>
+        <h1 className="text-xl font-bold">{exercise.name}</h1>
+        <p className="text-sm text-blue-100 mt-1">{exercise.muscle} · target {exercise.sets}×{exercise.reps}</p>
+      </div>
+
+      <div className="px-4 pt-4 space-y-2">
+        <div className={`text-[10px] font-bold uppercase tracking-wide ${theme.textMuted} px-1`}>
+          Sets — grey values from last session, tap to change
         </div>
 
-        {/* Log new set */}
-        <div className={`${theme.card} rounded-xl border ${theme.border} p-4 space-y-3`}>
-          <div className={`text-[10px] font-bold uppercase tracking-wide ${theme.textMuted}`}>Log set {(ex.loggedSets?.length || 0) + 1}</div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <div className={`text-xs ${theme.textMuted} mb-1`}>Weight (kg)</div>
-              <input type="number" inputMode="decimal" value={weightDraft} onChange={e => setWeightDraft(e.target.value)}
-                className={`w-full h-12 px-3 rounded-lg ${theme.inputBg} ${theme.text} text-lg font-semibold`} placeholder="0" />
-            </div>
-            <div>
-              <div className={`text-xs ${theme.textMuted} mb-1`}>Reps</div>
-              <input type="number" inputMode="numeric" value={repsDraft} onChange={e => setRepsDraft(e.target.value)}
-                className={`w-full h-12 px-3 rounded-lg ${theme.inputBg} ${theme.text} text-lg font-semibold`} placeholder="0" />
+        {sets.map((s, i) => (
+          <div key={i} className={`${theme.card} rounded-xl border ${theme.border} p-3`}>
+            <div className="flex items-center gap-2">
+              <div className={`w-8 text-xs font-bold ${theme.textMuted}`}>#{i + 1}</div>
+              <div className="flex-1">
+                <div className={`text-[10px] ${theme.textMuted} mb-0.5`}>Weight (kg)</div>
+                <input type="number" inputMode="decimal" value={s.weight || ""} onChange={e => updateSet(i, "weight", e.target.value)}
+                  className={`w-full h-10 px-2 rounded text-base font-semibold ${theme.inputBg} ${s.dirty ? theme.text : theme.textMuted}`} />
+              </div>
+              <div className="flex-1">
+                <div className={`text-[10px] ${theme.textMuted} mb-0.5`}>Reps</div>
+                <input type="number" inputMode="numeric" value={s.reps || ""} onChange={e => updateSet(i, "reps", e.target.value)}
+                  className={`w-full h-10 px-2 rounded text-base font-semibold ${theme.inputBg} ${s.dirty ? theme.text : theme.textMuted}`} />
+              </div>
+              <button onClick={() => removeSet(i)} className="w-8 h-10 text-red-500 font-bold">×</button>
             </div>
           </div>
-          <button onClick={logSet} disabled={!weightDraft || !repsDraft}
-            className="w-full h-12 text-white rounded-lg font-bold"
-            style={{ background: ORANGE, opacity: (!weightDraft || !repsDraft) ? 0.5 : 1 }}>
-            Log set
-          </button>
-        </div>
+        ))}
 
-        {/* Nav between exercises */}
-        <div className="grid grid-cols-2 gap-2">
-          <button onClick={prevExercise} disabled={state.currentIdx === 0}
-            className={`h-11 rounded-lg font-semibold text-sm ${theme.surface} ${theme.surfaceText}`}
-            style={{ opacity: state.currentIdx === 0 ? 0.4 : 1 }}>← Previous</button>
-          {state.currentIdx < total - 1 ? (
-            <button onClick={nextExercise}
-              className={`h-11 rounded-lg font-semibold text-sm ${theme.surface} ${theme.surfaceText}`}>
-              Next →
-            </button>
-          ) : (
-            <button onClick={onFinish}
-              className="h-11 text-white rounded-lg font-bold text-sm"
-              style={{ background: "#10b981" }}>
-              Finish session ✓
-            </button>
-          )}
-        </div>
+        <button onClick={addSet} className={`w-full h-11 ${theme.surface} ${theme.surfaceText} rounded-xl text-sm font-semibold`}>
+          + Add set
+        </button>
+
+        <button onClick={handleSave} className="w-full h-12 text-white rounded-xl font-bold mt-2" style={{ backgroundColor: ORANGE }}>
+          Save
+        </button>
       </div>
     </div>
   );
 }
+
 
 function TrainingPreview({ profile, themeCtx, session }) {
   const { theme } = themeCtx;
